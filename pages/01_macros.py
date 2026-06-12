@@ -93,8 +93,11 @@ hr { border-color: #21262d; margin: 1.2rem 0; }
 # ─────────────────────────────────────────────────────────────
 # IMPORTS
 # ─────────────────────────────────────────────────────────────
+
+from utils.markets import render_global_markets    
+
 from utils.macros import (
-    render_global_markets,
+    # render_global_markets,
     render_epidemics,
     render_sanctions,
     render_war,
@@ -158,29 +161,21 @@ if vis.get("01 · Global Financial Markets"):
     st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────
-# ROW A — WAR | SANCTIONS  (side by side)
+# ROW A — WAR | SANCTIONS | EPIDEMICS | TARIFFS  (4 columns)
 # ─────────────────────────────────────────────────────────────
 show_war      = vis.get("02 · War")
 show_sanctions = vis.get("03 · Sanctions")
+show_epi      = vis.get("04 · Epidemics")
+show_tariffs  = vis.get("05 · Tariffs")
 
-if show_war or show_sanctions:
-    col_war, col_sanc = st.columns(2)
+if show_war or show_sanctions or show_epi or show_tariffs:
+    col_war, col_sanc, col_epi, col_tar = st.columns(4)
     if show_war:
         with col_war:
             render_war()
     if show_sanctions:
         with col_sanc:
             render_sanctions()
-    st.markdown("---")
-
-# ─────────────────────────────────────────────────────────────
-# ROW B — EPIDEMICS | TARIFFS  (side by side)
-# ─────────────────────────────────────────────────────────────
-show_epi     = vis.get("04 · Epidemics")
-show_tariffs = vis.get("05 · Tariffs")
-
-if show_epi or show_tariffs:
-    col_epi, col_tar = st.columns(2)
     if show_epi:
         with col_epi:
             render_epidemics()
@@ -190,20 +185,17 @@ if show_epi or show_tariffs:
     st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────
-# SECTION 06 — NATIONAL ECONOMIC INDICATORS  (full-width)
+# ROW B — ECON CALENDAR | CENTRAL BANKS | CREDIT CONTAGION  (3 columns)
 # ─────────────────────────────────────────────────────────────
-if vis.get("06 · National Economic Indicators"):
-    render_econ_calendar()
-    st.markdown("---")
+show_econ = vis.get("06 · National Economic Indicators")
+show_cb   = vis.get("07 · Central Bank Decisions")
+show_crd  = vis.get("08 · Credit & Default Contagion")
 
-# ─────────────────────────────────────────────────────────────
-# ROW C — CENTRAL BANKS | CREDIT CONTAGION  (side by side)
-# ─────────────────────────────────────────────────────────────
-show_cb  = vis.get("07 · Central Bank Decisions")
-show_crd = vis.get("08 · Credit & Default Contagion")
-
-if show_cb or show_crd:
-    col_cb, col_crd = st.columns(2)
+if show_econ or show_cb or show_crd:
+    col_econ, col_cb, col_crd = st.columns(3)
+    if show_econ:
+        with col_econ:
+            render_econ_calendar()
     if show_cb:
         with col_cb:
             render_central_banks()

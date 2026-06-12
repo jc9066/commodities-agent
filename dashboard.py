@@ -24,10 +24,6 @@ from pathlib import Path
 from PIL import Image
 from utils.weather import (
     make_cached_weather_fetcher,
-    to_rainfall_wide,
-    get_available_groups,
-    get_available_zones,
-    get_available_parameters,
     PARAM_LABEL,
     PRIMARY_PARAM,
 )
@@ -424,15 +420,6 @@ def make_monthly_series(base, vol=0.08, n=36, seed=99, trend=0.005):
     vals = base * np.exp(np.cumsum(noise))
     return months, vals
 
-
-def make_rainfall(regions, seed=7):
-    rng = np.random.default_rng(seed)
-    months = pd.date_range("2024-01-01", periods=17, freq="MS")
-    data = {}
-    for reg in regions:
-        base = rng.uniform(80, 250)
-        data[reg] = np.clip(rng.normal(base, 40, 17), 10, 450)
-    return pd.DataFrame(data, index=months)
 
 def make_iv_term_structure(atm_vol=0.25, seed=3):
     rng = np.random.default_rng(seed)

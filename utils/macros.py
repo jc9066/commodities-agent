@@ -2,27 +2,6 @@
 utils/macros.py
 ================
 Data fetchers and renderers for the Global Macros page.
-
-Sections
---------
-1. Global Financial Markets  (yfinance — VIX, SPX, DXY, UST10Y, Brent, Gold)
-2. Epidemics                 (WHO DON scraper via Playwright)
-3. Sanctions                 (Finnhub news, keyword-filtered)
-4. War                       (placeholder — no live data yet)
-5. Tariffs                   (Finnhub news, keyword-filtered)
-6. National Economic Indicators  (Finnhub economic calendar, filtered)
-7. Central Bank Decisions    (placeholder — no live data yet)
-8. Global Credit & Default Contagion  (placeholder — no live data yet)
-
-Caching
--------
-All live data is persisted to Feather files under  data/macros_cache/.
-TTLs are enforced by comparing file mtime to a max-age constant.
-
-Usage (inside Streamlit page)
-------------------------------
-    from utils.macros import render_macro_section
-    render_macro_section("Global Financial Markets")
 """
 
 from __future__ import annotations
@@ -42,33 +21,26 @@ import requests
 import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
 
-# ──────────────────────────────────────────────────────────────
-# CONSTANTS
-# ──────────────────────────────────────────────────────────────
 CACHE_DIR = Path("data/macros_cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 FINNHUB_KEY = "d8citi1r01qidic84gdgd8citi1r01qidic84ge0"
 FRED_KEY    = "65089965a39d120644a7310569c55c8b"
 
-# Feather file paths
 FP_MARKETS   = CACHE_DIR / "global_markets.feather"
 FP_EPIDEMICS = CACHE_DIR / "epidemics.feather"
 FP_SANCTIONS = CACHE_DIR / "sanctions.feather"
 FP_TARIFFS   = CACHE_DIR / "tariffs.feather"
 FP_ECON_CAL  = CACHE_DIR / "econ_calendar.feather"
 
-# Cache max ages (seconds)
-TTL_MARKETS  = 3600        # 1 hour
-TTL_NEWS     = 6 * 3600    # 6 hours
-TTL_ECON_CAL = 6 * 3600    # 6 hours
+TTL_MARKETS  = 3600
+TTL_NEWS     = 6 * 3600
+TTL_ECON_CAL = 6 * 3600
 
-# ──────────────────────────────────────────────────────────────
-# COLOUR PALETTE  (matches dashboard dark theme)
-# ──────────────────────────────────────────────────────────────
 C_BLUE   = "#58a6ff"
 C_GREEN  = "#3fb950"
 C_RED    = "#f85149"
@@ -86,22 +58,16 @@ PLOTLY_BASE = dict(
     font=dict(family="IBM Plex Mono", size=11),
 )
 
-# ──────────────────────────────────────────────────────────────
-# HELPERS
-# ──────────────────────────────────────────────────────────────
 
 def _is_stale(fp: Path, ttl: int) -> bool:
     if not fp.exists():
         return True
-    age = time.time() - fp.stat().st_mtime
-    return age > ttl
+    return time.time() - fp.stat().st_mtime > ttl
 
 
 def _save_feather(df: pd.DataFrame, fp: Path) -> None:
-    # Feather requires string column names and specific dtypes
     df = df.copy()
     df.columns = [str(c) for c in df.columns]
-    # Convert object cols with mixed types to string for feather safety
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype(str)
     df.reset_index(drop=True).to_feather(fp)
@@ -115,10 +81,7 @@ def _load_feather(fp: Path) -> pd.DataFrame:
 
 
 def _section_header(label: str) -> None:
-    st.markdown(
-        f'<div class="section-header">{label}</div>',
-        unsafe_allow_html=True,
-    )
+    st.markdown(f'<div class="section-header">{label}</div>', unsafe_allow_html=True)
 
 
 def _placeholder_card(title: str, message: str = "No live data source connected yet.") -> None:
@@ -141,29 +104,23 @@ def _placeholder_card(title: str, message: str = "No live data source connected 
 # ──────────────────────────────────────────────────────────────
 
 MARKET_TICKERS = {
-    "VIX":        ("^VIX",      "CBOE VIX",            C_RED),
-    "S&P 500":    ("^GSPC",     "S&P 500",              C_GREEN),
-    "DXY":        ("DX-Y.NYB",  "US Dollar Index",      C_BLUE),
-    "UST 10Y":    ("^TNX",      "US 10Y Yield (%)",     C_PURPLE),
-    "Brent":      ("BZ=F",      "Brent Crude (USD/bbl)",C_ORANGE),
-    "Gold":       ("GC=F",      "Gold (USD/oz)",        "#f0d060"),
-    "Copper":     ("HG=F",      "Copper (USc/lb)",      "#e88c34"),
-    "MSCI EM":    ("EEM",       "iShares MSCI EM ETF",  C_GREY),
+    "VIX":        ("^VIX",      "CBOE VIX",             C_RED),
+    "S&P 500":    ("^GSPC",     "S&P 500",               C_GREEN),
+    "DXY":        ("DX-Y.NYB",  "US Dollar Index",       C_BLUE),
+    "UST 10Y":    ("^TNX",      "US 10Y Yield (%)",      C_PURPLE),
+    "Brent":      ("BZ=F",      "Brent Crude (USD/bbl)", C_ORANGE),
+    "Gold":       ("GC=F",      "Gold (USD/oz)",         "#f0d060"),
+    "Copper":     ("HG=F",      "Copper (USc/lb)",       "#e88c34"),
+    "MSCI EM":    ("EEM",       "iShares MSCI EM ETF",   C_GREY),
 }
 
 
 @st.cache_data(ttl=TTL_MARKETS, show_spinner=False)
 def load_market_data(period: str = "1y") -> pd.DataFrame:
-    """
-    Fetch daily close for all MARKET_TICKERS via yfinance.
-    Falls back to feather cache if yfinance fails.
-    Returns wide DataFrame indexed by date, columns = display names.
-    """
     try:
         import yfinance as yf
         symbols = [v[0] for v in MARKET_TICKERS.values()]
         raw = yf.download(symbols, period=period, auto_adjust=True, progress=False)["Close"]
-        # rename symbols → display names
         rev = {v[0]: k for k, v in MARKET_TICKERS.items()}
         raw = raw.rename(columns=rev)
         raw.index = pd.to_datetime(raw.index)
@@ -184,7 +141,8 @@ def _hex_to_rgba(hex_color: str, alpha: float = 0.09) -> str:
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
 
-def _spark_fig(series: pd.Series, color: str, label: str) -> go.Figure:
+
+def _spark_fig(series: pd.Series, color: str, label: str):
     s = series.dropna()
     chg = (s.iloc[-1] / s.iloc[-2] - 1) * 100 if len(s) >= 2 else 0
     chg_color = C_GREEN if chg >= 0 else C_RED
@@ -218,7 +176,6 @@ def render_global_markets(period: str = "1y") -> None:
         st.error("Market data unavailable.")
         return
 
-    # ── snapshot metric row ──────────────────────────────────
     cols = st.columns(len(MARKET_TICKERS))
     for col, (display_name, (ticker, desc, color)) in zip(cols, MARKET_TICKERS.items()):
         if display_name not in mdf.columns:
@@ -240,7 +197,6 @@ def render_global_markets(period: str = "1y") -> None:
 
     st.markdown("<div style='margin:10px 0'></div>", unsafe_allow_html=True)
 
-    # ── sparkline grid: 4 per row ────────────────────────────
     items = [(k, v) for k, v in MARKET_TICKERS.items() if k in mdf.columns]
     for row_start in range(0, len(items), 4):
         row_items = items[row_start:row_start + 4]
@@ -258,7 +214,6 @@ def render_global_markets(period: str = "1y") -> None:
             )
             scol.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
-    # ── VIX regime + SPX together ────────────────────────────
     if "VIX" in mdf.columns and "S&P 500" in mdf.columns:
         st.markdown("---")
         fig2 = make_subplots(
@@ -275,7 +230,6 @@ def render_global_markets(period: str = "1y") -> None:
             name="VIX", fill="tozeroy", fillcolor=_hex_to_rgba(C_RED),
         ), row=1, col=1)
 
-        # VIX regime bands
         for level, label, col_ in [(20, "Low Stress", C_GREEN), (30, "Elevated", C_ORANGE), (40, "Crisis", C_RED)]:
             fig2.add_hline(y=level, line_dash="dot", line_color=col_, line_width=0.8,
                            annotation_text=label,
@@ -317,11 +271,9 @@ def _clean(text: str | None) -> str:
 
 @st.cache_data(ttl=TTL_NEWS, show_spinner=False)
 def load_epidemics(year: int | None = None) -> pd.DataFrame:
-    """Scrape WHO DON page. Falls back to feather cache."""
     if year is None:
         year = datetime.today().year
 
-    # check feather freshness
     if not _is_stale(FP_EPIDEMICS, TTL_NEWS):
         df = _load_feather(FP_EPIDEMICS)
         if not df.empty:
@@ -330,7 +282,6 @@ def load_epidemics(year: int | None = None) -> pd.DataFrame:
 
     try:
         from playwright.sync_api import sync_playwright
-        from bs4 import BeautifulSoup
 
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
@@ -351,9 +302,9 @@ def load_epidemics(year: int | None = None) -> pd.DataFrame:
             if url in seen:
                 continue
             seen.add(url)
-            text = _clean(link.get_text(" ", strip=True))
-            dm   = DATE_PAT.search(text)
-            pub  = dm.group(1) if dm else None
+            text  = _clean(link.get_text(" ", strip=True))
+            dm    = DATE_PAT.search(text)
+            pub   = dm.group(1) if dm else None
             title = text.split("|", 1)[-1].strip() if "|" in text else text
             rows.append({"PublicationDate": pub, "Title": title, "URL": url})
 
@@ -389,7 +340,6 @@ def render_epidemics() -> None:
 
     st.caption(f"{len(df)} outbreaks · {year_sel}")
 
-    # HTML table with links
     rows_html = ""
     for _, row in df.iterrows():
         date_str = row["PublicationDate"].strftime("%d %b %Y") if pd.notna(row["PublicationDate"]) else "—"
@@ -425,50 +375,87 @@ def render_epidemics() -> None:
 # ──────────────────────────────────────────────────────────────
 
 SECTION_NEWS_CONFIG = {
+    "war": {
+        "fp":       CACHE_DIR / "war.feather",
+        "keywords": [
+            "war", "invasion", "airstrike", "missile", "troops", "military offensive",
+            "ceasefire", "armed conflict", "bombing", "drone strike", "casualties",
+            "frontline", "artillery", "nato", "military aid", "weapons supply",
+            "naval blockade", "escalation", "occupation", "warship",
+        ],
+        "label":    "02 · War & Armed Conflict",
+        "color":    C_RED,
+    },
     "sanctions": {
         "fp":       FP_SANCTIONS,
-        "keywords": ["sanction", "sanctioned", "embargo", "OFAC", "export control", "blacklist"],
+        "keywords": [
+            "sanction", "sanctioned", "embargo", "OFAC", "export control", "blacklist",
+            "asset freeze", "travel ban", "trade restriction", "banned entity",
+            "secondary sanction", "SDN list",
+        ],
         "label":    "03 · Sanctions",
-        "header_num": "03",
         "color":    C_ORANGE,
     },
     "tariffs": {
         "fp":       FP_TARIFFS,
-        "keywords": ["tariff", "trade war", "import duty", "customs duty", "Section 301",
-                     "Section 232", "countervailing duty", "anti-dumping"],
+        "keywords": [
+            "tariff", "trade war", "import duty", "customs duty", "Section 301",
+            "Section 232", "countervailing duty", "anti-dumping", "retaliatory tariff",
+            "trade barrier", "import tax", "export ban", "trade deficit", "WTO dispute",
+        ],
         "label":    "05 · Tariffs",
-        "header_num": "05",
         "color":    C_PURPLE,
     },
 }
 
 
 @st.cache_data(ttl=TTL_NEWS, show_spinner=False)
-def _fetch_finnhub_news() -> pd.DataFrame:
-    """Fetch general news from Finnhub once; shared by sanctions + tariffs."""
+def _fetch_finnhub_news(max_pages: int = 20) -> pd.DataFrame:
+    """
+    Paginated Finnhub general news fetch.
+    Walks backwards through article IDs (min_id trick) to collect
+    up to max_pages batches (~100 articles each), then deduplicates.
+    Falls back to feather cache on failure.
+    """
+    FP_NEWS_CACHE = CACHE_DIR / "finnhub_news.feather"
     try:
-        r = requests.get(
-            "https://finnhub.io/api/v1/news",
-            params={"category": "general", "token": FINNHUB_KEY},
-            timeout=15,
-        )
-        r.raise_for_status()
-        data = r.json()
-        df = pd.DataFrame(data)
-        if df.empty:
-            return df
+        import finnhub
+        client = finnhub.Client(api_key=FINNHUB_KEY)
+        all_news = []
+        min_id = 0
+        for _ in range(max_pages):
+            batch = client.general_news("general", min_id=min_id)
+            if not batch:
+                break
+            all_news.extend(batch)
+            min_id = min(item["id"] for item in batch)
+
+        if not all_news:
+            raise ValueError("no articles returned")
+
+        df = pd.DataFrame(all_news)
+        df = df.drop_duplicates("id").reset_index(drop=True)
         df = df[["datetime", "headline", "summary", "source", "url"]].copy()
         df["datetime"] = pd.to_datetime(df["datetime"], unit="s")
         df["headline"] = df["headline"].str.replace(r"\s+", " ", regex=True).str.strip()
         df["summary"]  = df["summary"].str.replace(r"\s+", " ", regex=True).str.strip()
-        df = df.drop_duplicates("headline").sort_values("datetime", ascending=False).reset_index(drop=True)
+        df = df.drop_duplicates("headline")
+        df = df.sort_values("datetime", ascending=False).reset_index(drop=True)
+
+        _save_feather(df, FP_NEWS_CACHE)
         return df
+
     except Exception as e:
-        logger.warning(f"Finnhub news fetch failed: {e}")
+        logger.warning(f"Finnhub paginated fetch failed: {e}")
+        # fall back to cached news
+        cached = _load_feather(FP_NEWS_CACHE)
+        if not cached.empty:
+            cached["datetime"] = pd.to_datetime(cached["datetime"], errors="coerce")
+            return cached
         return pd.DataFrame()
 
 
-def _filter_news(df: pd.DataFrame, keywords: list[str]) -> pd.DataFrame:
+def _filter_news(df: pd.DataFrame, keywords: list) -> pd.DataFrame:
     if df.empty:
         return df
     pat = "|".join(re.escape(k) for k in keywords)
@@ -489,7 +476,7 @@ def _render_news_table(df: pd.DataFrame, color: str, fp: Path) -> None:
 
     rows_html = ""
     for _, row in df.head(60).iterrows():
-        dt_str  = row["datetime"].strftime("%d %b %Y %H:%M") if pd.notna(row["datetime"]) else "—"
+        dt_str   = row["datetime"].strftime("%d %b %Y %H:%M") if pd.notna(row["datetime"]) else "—"
         headline = str(row["headline"])[:140]
         source   = str(row.get("source", ""))
         url      = str(row.get("url", "#"))
@@ -525,8 +512,7 @@ def render_sanctions() -> None:
     _section_header(cfg["label"])
     with st.spinner("Fetching news…"):
         raw = _fetch_finnhub_news()
-    df  = _filter_news(raw, cfg["keywords"])
-    _render_news_table(df, cfg["color"], cfg["fp"])
+    _render_news_table(_filter_news(raw, cfg["keywords"]), cfg["color"], cfg["fp"])
 
 
 def render_tariffs() -> None:
@@ -534,8 +520,7 @@ def render_tariffs() -> None:
     _section_header(cfg["label"])
     with st.spinner("Fetching news…"):
         raw = _fetch_finnhub_news()
-    df  = _filter_news(raw, cfg["keywords"])
-    _render_news_table(df, cfg["color"], cfg["fp"])
+    _render_news_table(_filter_news(raw, cfg["keywords"]), cfg["color"], cfg["fp"])
 
 
 # ──────────────────────────────────────────────────────────────
@@ -543,75 +528,141 @@ def render_tariffs() -> None:
 # ──────────────────────────────────────────────────────────────
 
 def render_war() -> None:
-    _section_header("02 · War & Armed Conflict")
-    _placeholder_card(
-        "No live data source connected",
-        "Planned integrations: ACLED armed conflict database, UCDP GED, GDELT event streams. "
-        "Add an API key and data loader to  utils/macros.py  →  load_conflict_data().",
-    )
+    cfg = SECTION_NEWS_CONFIG["war"]
+    _section_header(cfg["label"])
+    with st.spinner("Fetching conflict news…"):
+        raw = _fetch_finnhub_news()
+    _render_news_table(_filter_news(raw, cfg["keywords"]), cfg["color"], cfg["fp"])
 
 
 # ──────────────────────────────────────────────────────────────
-# 6.  NATIONAL ECONOMIC INDICATORS  (Finnhub economic calendar)
+# 6.  NATIONAL ECONOMIC INDICATORS  (ForexFactory calendar)
 # ──────────────────────────────────────────────────────────────
 
-ECON_COUNTRIES = ["US", "GB", "EU", "SG", "CA", "BR", "CN", "IN", "ID", "MY", "AU", "JP"]
+FF_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
-ECON_KEYWORDS = [
-    "cpi", "gdp", "interest rate", "industrial production", "fomc", "ppi", "fed", "pmi",
-    "trade", "imports", "exports", "jobless claims", "unemployment", "retail", "jolts",
-    "employment", "non-farm", "ism", "inventories", "oil", "inflation", "manufacturing",
-    "services", "housing", "consumer", "producer", "balance of payments", "current account",
-    "central bank", "monetary policy",
+FF_COUNTRIES = ["USD", "EUR", "GBP", "SGD", "CAD", "BRL", "CNY", "INR", "IDR", "MYR", "All", "Tentative"]
+
+FF_KEYWORDS = [
+    "cpi", "gdp", "interest rate", "industrial production", "fomc", "auction",
+    "confidence", "ppi", "fed", "pmi", "trade", "imports", "exports",
+    "jobless claims", "unemployment", "meetings", "crude", "retail", "jolts",
+    "employment", "non-farm", "trump", "federal", "ism", "fed's", "inventories", "oil", "OPEC", "M2", "inflation",
 ]
 
-IMPACT_MAP = {"low": "★☆☆", "medium": "★★☆", "high": "★★★"}
 IMPACT_ORDER = {"★★★": 0, "★★☆": 1, "★☆☆": 2, "—": 3}
 
 
-@st.cache_data(ttl=TTL_ECON_CAL, show_spinner=False)
-def load_econ_calendar() -> pd.DataFrame:
-    """Fetch Finnhub economic calendar. Returns cleaned DataFrame."""
-    try:
-        r = requests.get(
-            "https://finnhub.io/api/v1/calendar/economic",
-            params={"token": FINNHUB_KEY},
-            timeout=15,
-        )
-        r.raise_for_status()
-        cal = r.json().get("economicCalendar", [])
-        if not cal:
-            raise ValueError("empty calendar")
-        df = pd.DataFrame(cal)
-        df["time"]   = pd.to_datetime(df["time"], errors="coerce")
-        df["date"]   = df["time"].dt.date
-        df["time_s"] = df["time"].dt.strftime("%H:%M")
-        df["impact"] = df["impact"].map(IMPACT_MAP).fillna("—")
+def _scrape_forexfactory(week: str = "this") -> pd.DataFrame:
+    base_url = "https://www.forexfactory.com/calendar"
+    if week == "this":
+        url = base_url
+    elif week == "next":
+        url = f"{base_url}?week=next"
+    elif week == "last":
+        url = f"{base_url}?week=last"
+    else:
+        # any YYYY-MM-DD date within the target week
+        url = f"{base_url}?week={week}"
 
-        def _fmt(val, unit=""):
-            if pd.isna(val) or str(val).strip() in ("", "nan", "None"):
-                return "—"
+    r = requests.get(url, headers=FF_HEADERS, timeout=20)
+    r.raise_for_status()
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    rows = soup.select("tr.calendar__row--grey, tr.calendar__row")
+
+    data = []
+    current_date = ""
+    for row in rows:
+        date_cell = row.select_one(".calendar__date")
+        if date_cell and date_cell.get_text(strip=True):
+            raw_date = date_cell.get_text(strip=True)
             try:
-                num = round(float(val), 2)
-                suf = str(unit).strip() if pd.notna(unit) and str(unit).strip() not in ("", "nan") else ""
-                return f"{num}{suf}"
-            except ValueError:
-                return str(val)
+                current_date = datetime.strptime(
+                    raw_date + f" {datetime.today().year}", "%a%b %d %Y"
+                ).strftime("%Y-%m-%d")
+            except Exception:
+                current_date = raw_date
 
-        for col in ["actual", "estimate", "prev"]:
-            if col in df.columns:
-                df[col] = df.apply(lambda r, c=col: _fmt(r[c], r.get("unit", "")), axis=1)
+        if not row.select_one(".calendar__event"):
+            continue
 
-        df = df.rename(columns={"estimate": "forecast", "prev": "previous", "time_s": "time"})
-        keep = ["date", "time", "country", "event", "impact", "actual", "forecast", "previous"]
-        df = df[[c for c in keep if c in df.columns]]
-        df = df.sort_values(["date", "impact", "time"],
-                            key=lambda x: x.map(IMPACT_ORDER) if x.name == "impact" else x
-                            ).reset_index(drop=True)
+        def safe(selector, _row=row):
+            el = _row.select_one(selector)
+            return el.get_text(strip=True) if el else ""
+
+        impact_el    = row.select_one(".calendar__impact span")
+        impact_class = " ".join(impact_el.get("class", [])) if impact_el else ""
+        if "red" in impact_class:    impact = "high"
+        elif "ora" in impact_class:  impact = "medium"
+        elif "yel" in impact_class:  impact = "low"
+        else:                        impact = ""
+
+        data.append({
+            "date":     current_date,
+            "time":     safe(".calendar__time"),
+            "country":  safe(".calendar__currency"),
+            "event":    safe(".calendar__event-title"),
+            "impact":   impact,
+            "actual":   safe(".calendar__actual"),
+            "forecast": safe(".calendar__forecast"),
+            "previous": safe(".calendar__previous"),
+        })
+
+    df = pd.DataFrame(data)
+    if df.empty:
+        return df
+
+    df = df[df["event"] != ""].reset_index(drop=True)
+    df["date"]   = pd.to_datetime(df["date"], errors="coerce").dt.date
+    df["impact"] = df["impact"].map({"low": "★☆☆", "medium": "★★☆", "high": "★★★"}).fillna("—")
+
+    def _parse_val(val):
+        if pd.isna(val) or str(val).strip() in ("", "nan", "None"):
+            return "—"
+        s = str(val).strip()
+        try:
+            suffix  = next((u for u in ["%", "B", "M", "K"] if u in s), "")
+            cleaned = s.replace("%","").replace("B","").replace("M","").replace("K","").replace(",","").strip()
+            return f"{round(float(cleaned), 2)}{suffix}"
+        except ValueError:
+            return s
+
+    for col in ["actual", "forecast", "previous"]:
+        df[col] = df[col].apply(_parse_val)
+
+    return df.sort_values(["date", "time"]).reset_index(drop=True)
+
+
+@st.cache_data(ttl=TTL_ECON_CAL, show_spinner=False)
+def load_econ_calendar(week_param: str) -> pd.DataFrame:
+    """
+    Scrape ForexFactory for the week containing week_param (YYYY-MM-DD).
+    Keyword pre-filter only at load time — country/impact filtering is
+    done entirely in the UI so the multiselect sees the real country list.
+    Falls back to feather on failure.
+    """
+    try:
+        df = _scrape_forexfactory(week_param)
+        if df.empty:
+            raise ValueError("empty scrape result")
+
+        # keyword pre-filter only
+        pattern = "|".join(re.escape(k) for k in FF_KEYWORDS)
+        df = df[df["event"].str.lower().str.contains(pattern, na=False)].reset_index(drop=True)
+
         _save_feather(df.assign(date=df["date"].astype(str)), FP_ECON_CAL)
         return df
+
     except Exception as e:
-        logger.warning(f"Finnhub econ calendar failed: {e}")
+        logger.warning(f"ForexFactory scrape failed: {e}")
         cached = _load_feather(FP_ECON_CAL)
         if not cached.empty:
             cached["date"] = pd.to_datetime(cached["date"], errors="coerce").dt.date
@@ -622,49 +673,75 @@ def load_econ_calendar() -> pd.DataFrame:
 def render_econ_calendar() -> None:
     _section_header("06 · National Economic Indicators · Economic Calendar")
 
-    with st.spinner("Loading economic calendar…"):
-        df = load_econ_calendar()
+    # ── Week selector with human-readable date ranges ───────
+    _today = datetime.today().date()
+    def _week_range(anchor):
+        mon = anchor - timedelta(days=anchor.weekday())
+        return mon, mon + timedelta(days=6)
+    _fmt = lambda d: d.strftime("%d %b")
+    _lm, _ls = _week_range(_today - timedelta(weeks=1))
+    _tm, _ts = _week_range(_today)
+    _nm, _ns = _week_range(_today + timedelta(weeks=1))
+
+    _options = {
+        f"This week  ({_fmt(_tm)} – {_fmt(_ts)})": _tm.strftime("%Y-%m-%d"),
+        f"Last week  ({_fmt(_lm)} – {_fmt(_ls)})": _lm.strftime("%Y-%m-%d"),
+        f"Next week  ({_fmt(_nm)} – {_fmt(_ns)})": _nm.strftime("%Y-%m-%d"),
+    }
+
+    dc1, dc2, dc3 = st.columns([3, 2, 2])
+    with dc1:
+        chosen_label = st.selectbox(
+            "Week",
+            list(_options.keys()),
+            key="macro_ff_week",
+            label_visibility="collapsed",
+        )
+        week_param = _options[chosen_label]
+
+    with st.spinner("Loading ForexFactory calendar…"):
+        df = load_econ_calendar(week_param)
 
     if df.empty:
-        st.error("Economic calendar unavailable.")
+        st.error("Calendar unavailable — ForexFactory may be blocking the request or no events matched.")
         return
 
-    # ── Filters row ──────────────────────────────────────────
-    fc1, fc2, fc3 = st.columns([2, 2, 2])
-    with fc1:
-        all_countries = sorted(df["country"].dropna().unique().tolist())
-        sel_countries = st.multiselect(
-            "Countries", all_countries,
-            default=[c for c in ECON_COUNTRIES if c in all_countries],
-            key="macro_econ_countries",
-        )
-    with fc2:
+    with dc2:
         sel_impact = st.multiselect(
             "Impact", ["★★★", "★★☆", "★☆☆"],
             default=["★★★", "★★☆"],
             key="macro_econ_impact",
         )
-    with fc3:
-        kw_filter = st.text_input("Keyword filter", value="", key="macro_econ_kw",
-                                  placeholder="e.g. cpi, gdp …")
+    with dc3:
+        kw_filter = st.text_input(
+            "Keyword filter", value="",
+            key="macro_econ_kw", placeholder="e.g. cpi, gdp",
+        )
 
-    # apply filters
+    fc1, _ = st.columns([4, 2])
+    with fc1:
+        all_countries = sorted(df["country"].dropna().unique().tolist())
+        # default to the meaningful currency codes; exclude noise like "Tent.", "All"
+        PREFERRED = {"USD", "EUR", "GBP", "SGD", "CAD", "BRL", "CNY", "INR", "IDR", "MYR", "JPY", "AUD"}
+        default_countries = [c for c in all_countries if c in PREFERRED] or all_countries
+        sel_countries = st.multiselect(
+            "Countries", all_countries,
+            default=default_countries,
+            key="macro_econ_countries",
+        )
+
+    # apply UI filters
     fdf = df.copy()
     if sel_countries:
         fdf = fdf[fdf["country"].isin(sel_countries)]
     if sel_impact:
         fdf = fdf[fdf["impact"].isin(sel_impact)]
     if kw_filter.strip():
-        pat = "|".join(re.escape(k.strip()) for k in kw_filter.split(","))
+        pat = "|".join(re.escape(k.strip()) for k in kw_filter.split(",") if k.strip())
         fdf = fdf[fdf["event"].str.lower().str.contains(pat, case=False, na=False)]
-    else:
-        # default keyword filter (commodity-relevant)
-        pat = "|".join(ECON_KEYWORDS)
-        fdf = fdf[fdf["event"].str.lower().str.contains(pat, na=False)]
 
-    st.caption(f"{len(fdf)} events after filter")
+    st.caption(f"{len(fdf)} events · {chosen_label} · source: ForexFactory")
 
-    # ── Render grouped by date ───────────────────────────────
     if fdf.empty:
         st.info("No events match the current filter.")
         return
@@ -676,7 +753,6 @@ def render_econ_calendar() -> None:
     for _, row in fdf.iterrows():
         d = row["date"]
         if d != prev_date:
-            # date group header
             try:
                 date_label = pd.Timestamp(d).strftime("%A, %d %b %Y")
             except Exception:
@@ -719,7 +795,7 @@ def render_econ_calendar() -> None:
     </table>
     </div>
     """, unsafe_allow_html=True)
-    st.caption("Source: Finnhub Economic Calendar · keyword-filtered for commodity-relevant releases")
+    st.caption("Source: ForexFactory · keyword + country filtered")
 
 
 # ──────────────────────────────────────────────────────────────

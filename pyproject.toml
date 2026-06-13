@@ -1,0 +1,16 @@
+[project]
+name = "ocpo-vanilla-pricer"
+version = "0.1.0"
+description = "uv project for pricing OCPO vanilla options with atlas-client data"
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "atlas-client",
+    "python-dotenv>=1.2.2",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+atlas-client = { path = "atlas_client-0.1.0-py3-none-any.whl" }

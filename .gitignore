@@ -1,0 +1,31 @@
+# Python virtual environment
+.venv/
+
+# VS Code
+.vscode/
+
+# Generated data
+data/
+output/
+
+# UV lock file
+uv.lock
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+.env.*
+
+# macOS
+.DS_Store
+
+# Streamlit cache
+.streamlit/secrets.toml
+
+# Logs
+*.log

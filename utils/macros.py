@@ -43,8 +43,11 @@ import streamlit as st
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 # ──────────────────────────────────────────────────────────────
 # CONSTANTS
@@ -52,8 +55,8 @@ logger = logging.getLogger(__name__)
 CACHE_DIR = Path("data/macros_cache")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-FINNHUB_KEY = "d8lnv49r01qnkjl7pp7gd8lnv49r01qnkjl7pp80"
-FRED_KEY    = "65089965a39d120644a7310569c55c8b"
+FINNHUB_KEY = os.getenv("FINNHUB_KEY")
+FRED_KEY    = os.getenv("FRED_KEY")
 
 # Feather file paths
 FP_MARKETS   = CACHE_DIR / "global_markets.feather"
@@ -137,49 +140,6 @@ def _placeholder_card(title: str, message: str = "No live data source connected 
     )
 
 
-# ──────────────────────────────────────────────────────────────
-# 1.  GLOBAL FINANCIAL MARKETS
-# ──────────────────────────────────────────────────────────────
-
-MARKET_TICKERS = {
-    "VIX":        ("^VIX",      "CBOE VIX",            C_RED),
-    "S&P 500":    ("^GSPC",     "S&P 500",              C_GREEN),
-    "DXY":        ("DX-Y.NYB",  "US Dollar Index",      C_BLUE),
-    "UST 10Y":    ("^TNX",      "US 10Y Yield (%)",     C_PURPLE),
-    "Brent":      ("BZ=F",      "Brent Crude (USD/bbl)",C_ORANGE),
-    "Gold":       ("GC=F",      "Gold (USD/oz)",        "#f0d060"),
-    "Copper":     ("HG=F",      "Copper (USc/lb)",      "#e88c34"),
-    "MSCI EM":    ("EEM",       "iShares MSCI EM ETF",  C_GREY),
-}
-
-
-@st.cache_data(ttl=TTL_MARKETS, show_spinner=False)
-def load_market_data(period: str = "1y") -> pd.DataFrame:
-    """
-    Fetch daily close for all MARKET_TICKERS via yfinance.
-    Falls back to feather cache if yfinance fails.
-    Returns wide DataFrame indexed by date, columns = display names.
-    """
-    try:
-        import yfinance as yf
-        symbols = [v[0] for v in MARKET_TICKERS.values()]
-        raw = yf.download(symbols, period=period, auto_adjust=True, progress=False)["Close"]
-        # rename symbols → display names
-        rev = {v[0]: k for k, v in MARKET_TICKERS.items()}
-        raw = raw.rename(columns=rev)
-        raw.index = pd.to_datetime(raw.index)
-        raw = raw.dropna(how="all")
-        _save_feather(raw.reset_index().rename(columns={"index": "date"}), FP_MARKETS)
-        return raw
-    except Exception as e:
-        logger.warning(f"yfinance failed: {e}")
-        cached = _load_feather(FP_MARKETS)
-        if not cached.empty:
-            cached["date"] = pd.to_datetime(cached["date"])
-            return cached.set_index("date")
-        return pd.DataFrame()
-
-
 def _hex_to_rgba(hex_color: str, alpha: float = 0.09) -> str:
     """Convert '#rrggbb' to 'rgba(r,g,b,alpha)' for Plotly fillcolor."""
     h = hex_color.lstrip("#")
@@ -209,98 +169,6 @@ def _spark_fig(series: pd.Series, color: str, label: str) -> go.Figure:
         yaxis=dict(visible=False, gridcolor=BORDER),
     )
     return fig, s.iloc[-1], chg, chg_color
-
-
-def render_global_markets(period: str = "1y") -> None:
-    _section_header("01 · Global Financial Markets")
-
-    with st.spinner("Loading market data…"):
-        mdf = load_market_data(period)
-
-    if mdf.empty:
-        st.error("Market data unavailable.")
-        return
-
-    # ── snapshot metric row ──────────────────────────────────
-    cols = st.columns(len(MARKET_TICKERS))
-    for col, (display_name, (ticker, desc, color)) in zip(cols, MARKET_TICKERS.items()):
-        if display_name not in mdf.columns:
-            continue
-        s = mdf[display_name].dropna()
-        if s.empty:
-            continue
-        last = s.iloc[-1]
-        prev = s.iloc[-2] if len(s) >= 2 else s.iloc[-1]
-        chg  = (last / prev - 1) * 100
-        arrow = "▲" if chg >= 0 else "▼"
-        delta_cls = "metric-delta-pos" if chg >= 0 else "metric-delta-neg"
-        col.markdown(f"""
-        <div class="metric-card">
-            <div class="metric-label">{display_name}</div>
-            <div class="metric-value" style="font-size:20px;">{last:,.2f}</div>
-            <div class="{delta_cls}">{arrow} {chg:+.2f}%</div>
-        </div>""", unsafe_allow_html=True)
-
-    st.markdown("<div style='margin:10px 0'></div>", unsafe_allow_html=True)
-
-    # ── sparkline grid: 4 per row ────────────────────────────
-    items = [(k, v) for k, v in MARKET_TICKERS.items() if k in mdf.columns]
-    for row_start in range(0, len(items), 4):
-        row_items = items[row_start:row_start + 4]
-        spark_cols = st.columns(4)
-        for scol, (display_name, (ticker, desc, color)) in zip(spark_cols, row_items):
-            s = mdf[display_name].dropna()
-            if s.empty:
-                continue
-            fig, last, chg, chg_color = _spark_fig(s, color, display_name)
-            scol.markdown(
-                f'<div style="color:{C_GREY};font-family:IBM Plex Mono,monospace;'
-                f'font-size:10px;text-transform:uppercase;letter-spacing:0.08em;">'
-                f'{desc}</div>',
-                unsafe_allow_html=True,
-            )
-            scol.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
-
-    # ── VIX regime + SPX together ────────────────────────────
-    if "VIX" in mdf.columns and "S&P 500" in mdf.columns:
-        st.markdown("---")
-        fig2 = make_subplots(
-            rows=2, cols=1, shared_xaxes=True,
-            row_heights=[0.4, 0.6],
-            vertical_spacing=0.04,
-        )
-        vix = mdf["VIX"].dropna()
-        spx = mdf["S&P 500"].dropna()
-
-        fig2.add_trace(go.Scatter(
-            x=vix.index, y=vix.values,
-            mode="lines", line=dict(color=C_RED, width=1.5),
-            name="VIX", fill="tozeroy", fillcolor=_hex_to_rgba(C_RED),
-        ), row=1, col=1)
-
-        # VIX regime bands
-        for level, label, col_ in [(20, "Low Stress", C_GREEN), (30, "Elevated", C_ORANGE), (40, "Crisis", C_RED)]:
-            fig2.add_hline(y=level, line_dash="dot", line_color=col_, line_width=0.8,
-                           annotation_text=label,
-                           annotation_font=dict(size=9, color=col_),
-                           row=1, col=1)
-
-        fig2.add_trace(go.Scatter(
-            x=spx.index, y=spx.values,
-            mode="lines", line=dict(color=C_GREEN, width=1.8),
-            name="S&P 500",
-        ), row=2, col=1)
-
-        fig2.update_layout(
-            **PLOTLY_BASE,
-            height=340,
-            margin=dict(l=0, r=0, t=10, b=0),
-            showlegend=True,
-            legend=dict(orientation="h", y=1.04, x=0),
-        )
-        fig2.update_yaxes(gridcolor=BORDER)
-        st.plotly_chart(fig2, width="stretch")
-    st.caption("Source: Yahoo Finance · delayed ~15 min")
 
 
 # ──────────────────────────────────────────────────────────────

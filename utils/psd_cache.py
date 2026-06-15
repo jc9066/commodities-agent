@@ -36,6 +36,9 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 # ── paths ─────────────────────────────────────────────────────
 _ROOT      = Path(__file__).parent.parent
@@ -46,8 +49,8 @@ CACHE_TTL_HOURS = 6
 
 # ── API ───────────────────────────────────────────────────────
 _BASE_URL = "https://api.fas.usda.gov"
-_API_KEY  = "5D9acNtwcN86Sznb3nDQrcBAvgLTxl9QNunu3uLz"
-_HEADERS  = {"accept": "application/json", "X-API-Key": _API_KEY}
+PSD_API_KEY  = os.getenv("PSD_API_KEY")
+_HEADERS  = {"accept": "application/json", "X-API-Key": PSD_API_KEY}
 
 COMMODITY_CODES: dict[str, str] = {
     "Crude Palm Oil":  "4243000",

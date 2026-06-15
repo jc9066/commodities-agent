@@ -28,6 +28,9 @@ import numpy as np
 import pandas as pd
 import requests
 import streamlit as st
+import os
+from dotenv import load_dotenv
+load_dotenv()
 
 # ─────────────────────────────────────────────────────────────
 # PATHS
@@ -39,7 +42,7 @@ FEATHER_PATH = CACHE_DIR / "policyshifts.feather"
 # ─────────────────────────────────────────────────────────────
 # GTA API CONFIG
 # ─────────────────────────────────────────────────────────────
-GTA_API_KEY = "11275a842c0003fc62402b16cbc41ea121ece4c0"
+GTA_API_KEY = os.getenv("GTA_API_KEY")
 GTA_URL     = "https://api.globaltradealert.org/api/v2/gta/data/"
 GTA_HEADERS = {
     "Content-Type": "application/json",

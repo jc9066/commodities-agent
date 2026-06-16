@@ -28,7 +28,11 @@ from utils.weather import (
     PRIMARY_PARAM,
 )
 from datetime import datetime
-from utils.fx_live_monitor import render_fx_section, fetch_fx_history, get_fx_snapshot
+from utils.fx_live_monitor import fetch_fx_history, get_fx_snapshot
+from utils.atlas_market_data import (
+    render_atlas_market_section,
+    get_atlas_range_price_metric,
+)
 from utils.psd import (
     COMMODITY_CODES, ATTRIBUTE_LABELS,
     load_world_sd, load_country_sd,
@@ -37,6 +41,7 @@ from utils.psd import (
 from utils.psd_cache import ensure_psd_cache
 ensure_psd_cache()
 from utils.weather import render_weather_section
+from datetime import date, timedelta
  
 fetch_weather = make_cached_weather_fetcher() 
 
@@ -151,8 +156,6 @@ COMMODITY_MAP = {
                      "Brent Crude (CME/ICE)", "WTI Crude (CME/ICE)"},
             "currency": {"BMD (Malaysia)": "MYR/MT"},
             "fx_pair": {"BMD (Malaysia)": "USD/MYR", },
-            "base_price": {"BMD (Malaysia)": 3900},
-            "twin_base": 48.5,
             "top5_producer": ["Indonesia", "Malaysia", "Thailand", "Columbia", "Nigeria"],
         },
         "Palm Olein": {
@@ -161,8 +164,6 @@ COMMODITY_MAP = {
                       "Brent Crude (CME/ICE)", "WTI Crude (CME/ICE)"},
             "currency": {"DCE (China)": "CNY/MT"},
             "fx_pair": {"DCE (China)": "USD/CNY"},
-            "base_price": {"DCE (China)": 3900},
-            "twin_base": 48.5,
             "top5_producer": ["Indonesia", "Malaysia", "Thailand", "Columbia", "Nigeria"],
         },
         "Soybeans": {
@@ -171,8 +172,6 @@ COMMODITY_MAP = {
                      "Rapeseed (LIFFE/Euronext)"},
             "currency": {"CME (US)": "USc/bu", "DCE (China)": "CNY/MT"},
             "fx_pair": {"CME (US)": "USD/USD", "DCE (China)": "USD/CNY"},
-            "base_price": {"CME (US)": 1050, "DCE (China)": 4500},
-            "twin_base": 510,
             "top5_producer": ["Brazil", "United States", "Argentina", "China", "Paraguay"],
         },
         "Bean Oil": {
@@ -181,8 +180,6 @@ COMMODITY_MAP = {
                      "Palm Olein (DCE)", "Crude Palm Oil (BMD)"},
             "currency": {"CME (US)": "USc/bu", "DCE (China)": "CNY/MT"},
             "fx_pair": {"CME (US)": "USD/USD", "DCE (China)": "USD/CNY"},
-            "base_price": {"CME (US)": 1050, "DCE (China)": 4500},
-            "twin_base": 510,
             "top5_producer": ["China", "United States", "Brazil", "Argentina", "European Union"],
         },
         "Soymeal": {
@@ -190,8 +187,6 @@ COMMODITY_MAP = {
             "twin": {"Soybeans (CME)", "Soybeans (DCE)", "Corn (CME)", "Corn (DCE)"},
             "currency": {"CME (US)": "USc/bu", "DCE (China)": "CNY/MT"},
             "fx_pair": {"CME (US)": "USD/USD", "DCE (China)": "USD/CNY"},
-            "base_price": {"CME (US)": 1050, "DCE (China)": 4500},
-            "twin_base": 510,
             "top5_producer": ["China", "United States", "Brazil", "Argentina", "European Union"],
         },
         "Canola/Rapeseed": {
@@ -200,8 +195,6 @@ COMMODITY_MAP = {
                      "Soybeans(DCE)"},
             "currency": {"ICE (Canada)": "CAD/T", "LIFFE/Euronext (EU)": "EUR/MT"},
             "fx_pair": {"ICE (Canada)": "USD/CAD", "LIFFE/Euronext (EU)": "USD/EUR"},
-            "base_price": {"ICE (Canada)": 620},
-            "twin_base": 7400,
             "top5_producer": ["Canada", "European Union", "China", "India", "Australia"],
         },
         "Rapeseed Oil": {
@@ -210,8 +203,6 @@ COMMODITY_MAP = {
                      "Bean Oil (DCE)", "Palm Olein (DCE)", "Crude Palm Oil (BMD)"},
             "currency": {"ZCE (China)": "CNY/MT"},
             "fx_pair": {"ZCE (China)": "USD/CNY"},
-            "base_price": {"ZCE (China)": 620},
-            "twin_base": 7400,
             "top5_producer": ["European Union", "China", "Canada", "India", "Russia"],
         },
     },
@@ -221,8 +212,6 @@ COMMODITY_MAP = {
             "twin": {"Wheat (CME)", "Soybeans (CME)", "Soybeans (DCE)"},
             "currency": {"CME (US)": "USc/bu", "DCE (China)": "CNY/MT"},
             "fx_pair": {"CME (US)": "USD/USD", "DCE (China)": "USD/CNY"},
-            "base_price": {"CME (US)": 460, "DCE (China)": 2500},
-            "twin_base": 550,
             "top5_producer": ["United States", "China", "Brazil", "Argentina", "European Union"],
         },
         "Wheat": {
@@ -231,8 +220,6 @@ COMMODITY_MAP = {
                      "Minneapolis Wheat, HRS (MIAX)", "Milling Wheat (LIFFE/Euronext)"},
             "currency": {"CME (US)": "USc/bu", "MIAX (US)": "USc/bu", "LIFFE/Euronext (EU)": "EUR/MT"},
             "fx_pair": {"CME (US)": "USD/USD", "MIAX (US)": "USD/USD", "LIFFE/Euronext (EU)": "USD/EUR"},
-            "base_price": {"CME (US)": 560},
-            "twin_base": 210,
             "top5_producer": ["European Union", "China", "India", "Russia", "United States"],
         },
     },
@@ -242,8 +229,6 @@ COMMODITY_MAP = {
             "twin": {"White Sugar (ICE)", "White Sugar (ZCE)", "Raw Sugar (ICE)"},
             "currency": {"ICE (US)": "USD/MT", "ZCE (China)": "CNY/MT", "ICE (US)": "USc/lb"},
             "fx_pair": {"ICE (US)": "USD/USD", "ZCE (China)": "USD/CNY"},
-            "base_price": {"ICE (US)": 21},
-            "twin_base": 580,
             "top5_producer": ["Brazil", "India", "European Union", "China", "Thailand"],
         },
         "Coffee": {
@@ -251,8 +236,6 @@ COMMODITY_MAP = {
             "twin": {"Robusta Coffee (ICE)", "Arabica Coffee (ICE)"},
             "currency": {"ICE (Europe)": "USD/MT", "ICE (US)": "USD/MT"},
             "fx_pair": {"ICE (Europe)": "USD/USD", "ICE (US)": "USD/BRL"},
-            "base_price": {"ICE (US)": 185},
-            "twin_base": 2400,
             "top5_producer": ["Brazil", "Vietnam", "Columbia", "Indonesia", "Ethiopia"],
         },
         "Cocoa": {
@@ -260,8 +243,6 @@ COMMODITY_MAP = {
             "twin": {"Cocoa (ICE)", "LDN Cocoa (ICE)"},
             "currency": {"ICE (US)": "USD/MT", "ICE (Europe)": "GBP/MT"},
             "fx_pair": {"ICE (US)": "USD/USD", "ICE (Europe)": "USD/GBP"},
-            "base_price": {"ICE (US)": 8500},
-            "twin_base": 7200,
             "top5_producer": ["Ivory Coast", "Ghana", "Ecuador", "Indonesia", "Nigeria"],
         },
         "Cotton": {
@@ -269,8 +250,6 @@ COMMODITY_MAP = {
             "twin": {"Cotton No. 2 (ICE)", "Cotton (ZCE)"},
             "currency": {"ICE (US)": "USD/lb", "ZCE (China)": "CNY/MT"},
             "fx_pair": {"ICE (US)": "USD/USD", "ZCE (China)": "USD/CNY"},
-            "base_price": {"ICE (US)": 8500},
-            "twin_base": 7200,
             "top5_producer": ["China", "India", "Brazil", "United States", "Pakistan"],
         },
     },
@@ -281,8 +260,6 @@ COMMODITY_MAP = {
                      "Soymeal (DCE)"},
             "currency": {"CME (US)": "USc/lb"},
             "fx_pair": {"CME (US)": "USD/USD"},
-            "base_price": {"CME (US)": 82},
-            "twin_base": 175,
             "top5_producer": ["China", "European Union", "United States", "Brazil", "Russia"],
         },
         "Live Cattle": {
@@ -290,8 +267,6 @@ COMMODITY_MAP = {
             "twin": {"Feeder Cattle (CME)", "Corn (CME)", "Corn (DCE)"},
             "currency": {"CME (US)": "USc/lb"},
             "fx_pair": {"CME (US)": "USD/USD"},
-            "base_price": {"CME (US)": 82},
-            "twin_base": 175,
             "top5_producer": ["Brazil", "United States", "China", "European Union", "India"],
         },
         "Feeder Cattle": {
@@ -300,8 +275,6 @@ COMMODITY_MAP = {
                      "Soymeal (DCE)"},
             "currency": {"CME (US)": "USc/lb"},
             "fx_pair": {"CME (US)": "USD/USD"},
-            "base_price": {"CME (US)": 82},
-            "twin_base": 175,
             "top5_producer": ["Brazil", "United States", "China", "European Union", "India"],
         },
     },
@@ -311,8 +284,6 @@ COMMODITY_MAP = {
             "twin": {"Heating Oil (CME)", "Brent Crude (CME/ICE)", "WTI Crude (CME/ICE)"},
             "currency": {"ICE (Europe)": "USD/MT"},
             "fx_pair": {"ICE (Europe)": "USD/USD"},
-            "base_price": {"ICE (Europe)": 720},
-            "twin_base": 2.30,
             "top5_producer": ["United States", "China", "India", "Russia", "Saudi Arabia"],
         },
         "Henry Hub Natural Gas": {
@@ -320,8 +291,6 @@ COMMODITY_MAP = {
             "twin": {"Brent Crude (CME/ICE)", "WTI Crude (CME/ICE)"},
             "currency": {"CME (US)": "USD/MMBtu"},
             "fx_pair": {"CME (US)": "USD/USD"},
-            "base_price": {"CME (US)": 720},
-            "twin_base": 2.30,
             "top5_producer": ["United States", "Russia", "Iran", "China", "Canada"],
         },
         "Heating Oil": {
@@ -329,8 +298,6 @@ COMMODITY_MAP = {
             "twin": {"Gasoil (ICE)", "Brent Crude (CME/ICE)", "WTI Crude (CME/ICE)"},
             "currency": {"CME (US)": "USD/gal"},
             "fx_pair": {"CME (US)": "USD/USD"},
-            "base_price": {"CME (US)": 720},
-            "twin_base": 2.30,
             "top5_producer": ["United States", "China", "India", "Russia", "Saudi Arabia"],
         },
         "RBOB Gasoline": {
@@ -338,8 +305,6 @@ COMMODITY_MAP = {
             "twin": {"Brent Crude (CME/ICE)", "WTI Crude (CME/ICE)"},
             "currency": {"CME (US)": "USD/gal"},
             "fx_pair": {"CME (US)": "USD/USD"},
-            "base_price": {"CME (US)": 720},
-            "twin_base": 2.30,
             "top5_producer": ["United States", "China", "India", "Russia", "Saudi Arabia"],
         },
         "Fuel Oil 380 CST": {
@@ -347,8 +312,6 @@ COMMODITY_MAP = {
             "twin": {"Brent Crude (CME/ICE)", "WTI Crude (CME/ICE)"},
             "currency": {"SHFE (China)": "CNY/MT"},
             "fx_pair": {"SHFE (China)": "USD/CNY"},
-            "base_price": {"SHFE (China)": 720},
-            "twin_base": 2.30,
             "top5_producer": ["Russia", "United States", "China", "Saudi Arabia", "India"],
         },
         "LSFO": {
@@ -356,8 +319,6 @@ COMMODITY_MAP = {
             "twin": {"Brent Crude (CME/ICE)", "WTI Crude (CME/ICE)"},
             "currency": {"SHFE (China)": "CNY/MT"},
             "fx_pair": {"SHFE (China)": "USD/CNY"},
-            "base_price": {"SHFE (China)": 720},
-            "twin_base": 2.30,
             "top5_producer": ["United States", "China", "Russia", "Saudi Arabia", "South Korea"],
         },
     },
@@ -367,8 +328,6 @@ COMMODITY_MAP = {
             "twin": "Brent Crude (CME/ICE)",
             "currency": {"CME (US)": "USD/bbl", "ICE (Europe)": "USD/bbl"},
             "fx_pair": {"CME (US)": "USD/USD", "ICE (Europe)": "USD/USD"},
-            "base_price": {"CME (US)": 78, "ICE (Europe)": 78},
-            "twin_base": 82,
             "top5_producer": ["United States", "Russia", "Saudi Arabia", "Canada", "Iraq"],
         },
         "Brent Crude": {
@@ -376,8 +335,6 @@ COMMODITY_MAP = {
             "twin": "WTI Crude (CME/ICE)",
             "currency": {"CME (US)": "USD/bbl", "ICE (Europe)": "USD/bbl"},
             "fx_pair": {"CME (US)": "USD/USD", "ICE (Europe)": "USD/USD"},
-            "base_price": {"CME (US)": 78, "ICE (Europe)": 78},
-            "twin_base": 82,
             "top5_producer": ["United States", "Russia", "Saudi Arabia", "Canada", "China"],
         },
         "MS Crude Oil": {
@@ -385,8 +342,6 @@ COMMODITY_MAP = {
             "twin": {"WTI Crude (CME/ICE)", "Brent Crude (CME/ICE)"},
             "currency": {"SHFE (China)": "CNY/bbl"},
             "fx_pair": {"SHFE (China)": "USD/CNY"},
-            "base_price": {"SHFE (China)": 78},
-            "twin_base": 82,
             "top5_producer": ["United States", "Russia", "Saudi Arabia", "Canada", "Iraq"],
         },
     },
@@ -397,28 +352,11 @@ SUPPLY_DEMAND_ATTRS = [
     "Ending stocks", "Exports", "Imports"
 ]
 
+
 # ─────────────────────────────────────────────────────────────
 # DUMMY DATA GENERATORS
 # ─────────────────────────────────────────────────────────────
 
-def make_dates(n=252, freq="B"):
-    end = datetime.today()
-    return pd.bdate_range(end=end, periods=n)
-
-
-def make_price_series(base, vol=0.015, n=252, seed=42):
-    rng = np.random.default_rng(seed)
-    returns = rng.normal(0, vol, n)
-    prices = base * np.exp(np.cumsum(returns))
-    return prices
-
-
-def make_monthly_series(base, vol=0.08, n=36, seed=99, trend=0.005):
-    rng = np.random.default_rng(seed)
-    months = pd.date_range(end=datetime(2025, 5, 1), periods=n, freq="MS")
-    noise = rng.normal(trend, vol, n)
-    vals = base * np.exp(np.cumsum(noise))
-    return months, vals
 
 
 def make_iv_term_structure(atm_vol=0.25, seed=3):
@@ -460,14 +398,61 @@ with st.sidebar:
     st.caption("Data as of: May 30, 2025 (Dummy)")
     st.caption("© Commodities Intelligence | SD Guthrie")
 
+
+# ─────────────────────────────────────────────────────────────
+# SHARED MARKET PRICE RANGE FILTER
+# ─────────────────────────────────────────────────────────────
+RANGE_OPTIONS = ["1M", "3M", "6M", "YTD", "1Y", "2Y", "Custom"]
+
+def resolve_market_range(option, custom_range):
+    today = date.today()
+
+    if option == "1M":
+        return today - timedelta(days=31), today
+    if option == "3M":
+        return today - timedelta(days=92), today
+    if option == "6M":
+        return today - timedelta(days=183), today
+    if option == "YTD":
+        return date(today.year, 1, 1), today
+    if option == "1Y":
+        return today - timedelta(days=365), today
+    if option == "2Y":
+        return today - timedelta(days=730), today
+
+    if isinstance(custom_range, tuple) and len(custom_range) == 2:
+        return custom_range[0], custom_range[1]
+
+    return today - timedelta(days=365), today
+
+
+range_key = f"atlas_range_{commodity}_{exchange}"
+custom_key = f"atlas_custom_dates_{commodity}_{exchange}"
+
+# Default must match your render_atlas_market_section default.
+if range_key not in st.session_state:
+    st.session_state[range_key] = "6M"
+
+if custom_key not in st.session_state:
+    st.session_state[custom_key] = (
+        date.today() - timedelta(days=365),
+        date.today(),
+    )
+
+market_range_option = st.session_state[range_key]
+market_custom_range = st.session_state[custom_key]
+
+market_start_date, market_end_date = resolve_market_range(
+    market_range_option,
+    market_custom_range,
+)
+
 # Shorthand helpers
 currency   = cfg["currency"][exchange]
-twin_base      = cfg.get("twin_base", 100)
 regions        = cfg.get("growing_regions", [])
 top5_producers = cfg.get("top5_producer", [])
 currency = cfg["currency"].get(exchange, "")
 fx_pair  = cfg.get("fx_pair", {}).get(exchange, "USD/USD")
-base_px  = cfg.get("base_price", {}).get(exchange, 100)
 
 def _parse_twin_meta(twin_label: str, commodity_map: dict) -> tuple[str, str]:
     """
@@ -510,12 +495,15 @@ st.markdown(
 # ─────────────────────────────────────────────────────────────
 # ROW 1 — TOP METRICS
 # ─────────────────────────────────────────────────────────────
-dates_d = make_dates(252)
-prices  = make_price_series(base_px, vol=0.012)
+_atlas_metric = get_atlas_range_price_metric(
+    commodity=commodity,
+    exchange_label=exchange,
+    start_date=market_start_date,
+    end_date=market_end_date,
+)
 
-latest_px = prices[-1]
-prev_px   = prices[-2]
-chg_pct   = (latest_px - prev_px) / prev_px * 100
+latest_px = _atlas_metric.get("latest_px", np.nan)
+chg_pct = _atlas_metric.get("chg_pct", np.nan)
 # Live FX rate from Yahoo Finance via fx.py (cached, 1-hour TTL)
 # lookback_days=10 guarantees >=5 business days even across weekends/holidays
 try:
@@ -527,23 +515,6 @@ except Exception:
     fx_val = 1.0
     fx_chg = 0.0
  
-twin_prices_map     = {}
-twin_currencies_map = {}
-twin_fx_pairs_map   = {}
-for i, t in enumerate(all_twins):
-    t_ccy, t_fx = _parse_twin_meta(t, COMMODITY_MAP)
-    # best-effort base price lookup from COMMODITY_MAP
-    t_base_val = twin_base  # fallback
-    for cat_vals in COMMODITY_MAP.values():
-        for comm_name, comm_cfg in cat_vals.items():
-            if comm_name.lower() in t.lower():
-                bp = comm_cfg.get("base_price", {})
-                if bp:
-                    t_base_val = list(bp.values())[0]
-                break
-    twin_prices_map[t]     = pd.Series(make_price_series(t_base_val, seed=77 + i), index=dates_d)
-    twin_currencies_map[t] = t_ccy
-    twin_fx_pairs_map[t]   = t_fx
 
 
 # ------- ENSO DATA ---------------------------------------------------------------
@@ -570,9 +541,9 @@ _metric_cols = st.columns([1, 1, 1, 1, 2.2])
 metric_card(
     _metric_cols[0],
     f"{commodity} ({exchange})",
-    f"{latest_px:,.1f}",
-    f"{chg_pct:+.2f}%",
-    delta_pos=chg_pct >= 0,
+    "N/A" if pd.isna(latest_px) else f"{latest_px:,.1f}",
+    None if pd.isna(chg_pct) else f"{chg_pct:+.2f}% over {market_range_option}",
+    delta_pos=False if pd.isna(chg_pct) else chg_pct >= 0,
 )
 
 metric_card(
@@ -604,42 +575,17 @@ metric_card(
 )
 
 st.markdown("---")
-# _col_metrics = st.columns([1, 1, 1, 1, 2.2])
-
-# with _col_metrics:
-#     st.markdown('<div class="section-header">Key Metrics</div>', unsafe_allow_html=True)
-#     _mc_r1 = st.columns(2)
-#     _mc_r2 = st.columns(2)
-#     metric_card(_mc_r1[0], f"{commodity} ({exchange})", f"{latest_px:,.1f}",
-#                 f"{chg_pct:+.2f}%", delta_pos=chg_pct >= 0)
-#     metric_card(_mc_r1[1], fx_pair, f"{fx_val:.4f}",
-#                 f"{fx_chg:+.2f}%", delta_pos=fx_chg >= 0)
-#     with _mc_r2[0]:
-#         st.markdown(f'''
-#         <div class="metric-card">
-#             <div class="metric-label">ENSO Status</div>
-#             <div class="metric-value" style="font-size:18px;margin:8px 0">
-#                 <span class="enso-badge {enso_class}">{enso_status}</span>
-#             </div>
-#             <div style="color:#8b949e;font-family:'IBM Plex Mono',monospace;font-size:12px;">
-#                 ONI: {enso_oni} &nbsp;|&nbsp; CPC / May 2026
-#             </div>
-#         </div>''', unsafe_allow_html=True)
-#     metric_card(_mc_r2[1], "30-Day Realized Vol", "18.4%", "ATM IV: 22.1%", delta_pos=True)
 
 _col_fx, _col_sd, _col_policy = st.columns([1.55, 1.55, 1.45])
 
 with _col_fx:
-    render_fx_section(
-        commodity         = commodity,
-        exchange          = exchange,
-        currency          = currency,
-        fx_pair           = fx_pair,
-        commodity_prices  = pd.Series(prices, index=dates_d),
-        twin_prices       = twin_prices_map,
-        twin_currencies   = twin_currencies_map,
-        twin_fx_pairs     = twin_fx_pairs_map,
-        lookback_days     = 365,
+    render_atlas_market_section(
+        commodity=commodity,
+        exchange=exchange,
+        currency=currency,
+        fx_pair=fx_pair,
+        twin_labels=all_twins,
+        lookback_days=365,
     )
 
 with _col_sd:

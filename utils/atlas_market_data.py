@@ -59,6 +59,8 @@ except Exception:  # fallback when this file is beside fx_live_monitor.py
         fetch_fx_live_monitor,
     )
 
+from utils.atlas_cache import load_cached_history
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Atlas connection
@@ -305,45 +307,25 @@ def load_atlas_futures_contracts(exchange_code: str, product_code: str) -> pd.Da
     return pd.DataFrame()
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def load_atlas_futures_contracts_all(exchange_code: str, product_code: str) -> pd.DataFrame:
-    """
-    Return all known futures contracts for an Atlas exchange/product.
-
-    This is used for continuous front-month charts because a historical
-    continuous series may need contracts that are no longer active today.
-    """
-    client = get_atlas_client()
-
+@st.cache_data(ttl=3600)
+def load_atlas_futures_contracts_all(exchange_code: str, product_code: str):
     try:
+        client = get_atlas_client()
         raw = client.futures(exchange_code=exchange_code, active_only=False)
-    except TypeError:
-        # Fallback for client versions that do not accept active_only.
-        raw = client.futures(exchange_code=exchange_code)
 
-    df = to_df(raw)
-    if df.empty:
+        df = pd.DataFrame(raw)
+
+        if df.empty:
+            return pd.DataFrame()
+
+        if "product_code" in df.columns:
+            df = df[df["product_code"].astype(str) == str(product_code)]
+
         return df
 
-    product_code_upper = product_code.upper()
-
-    filter_cols = [
-        "product_code", "exchange_symbol", "root_symbol", "root", "symbol_root",
-        "product", "exchange_product_code",
-    ]
-    for col in filter_cols:
-        if col in df.columns:
-            mask = df[col].astype(str).str.upper().eq(product_code_upper)
-            if mask.any():
-                return df.loc[mask].copy()
-
-    if "canonical_symbol" in df.columns:
-        mask = df["canonical_symbol"].astype(str).str.upper().str.startswith(product_code_upper)
-        if mask.any():
-            return df.loc[mask].copy()
-
-    return pd.DataFrame()
-
+    except Exception as e:
+        st.warning(f"Atlas futures contracts could not be loaded: {e}")
+        return pd.DataFrame()
 
 def _contract_sort_key(df: pd.DataFrame, as_of: date | None = None) -> pd.DataFrame:
     if df.empty:
@@ -821,7 +803,13 @@ def _load_continuous_front_month_history(
     if not spec.data_available:
         return None, pd.DataFrame(), f"{spec.exchange_code} / {spec.provider_exchange} data unavailable currently"
 
-    contracts = load_atlas_futures_contracts_all(spec.exchange_code, spec.product_code)
+    contracts = load_atlas_futures_contracts_all(
+        spec.exchange_code,
+        spec.product_code
+    )
+
+    if contracts.empty:
+        return None, pd.DataFrame(), "Atlas connection failed or no futures contracts found."
 
     # Fallback if the client/source only returns active contracts.
     if contracts.empty:
@@ -862,7 +850,7 @@ def _load_continuous_front_month_history(
         expiry_date = expiry_dt.date() if pd.notna(expiry_dt) else None
 
         try:
-            hist = load_atlas_futures_history(symbol, _date_str(start_date), _date_str(end_date))
+            hist = _load_history_with_feather_cache(spec, symbol, start_date, end_date)
         except Exception:
             continue
 
@@ -945,6 +933,23 @@ def _get_contract_options(spec: AtlasProductSpec, as_of: date) -> pd.DataFrame:
     except Exception:
         return pd.DataFrame()
 
+def _load_history_with_feather_cache(
+    spec: "AtlasProductSpec",
+    canonical_symbol: str,
+    start_date: date,
+    end_date: date,
+) -> pd.DataFrame:
+    """
+    Drop-in wrapper around load_atlas_futures_history that persists to feather.
+    Use this instead of calling load_atlas_futures_history directly.
+    """
+    return load_cached_history(
+        exchange_code=spec.exchange_code,
+        product_code=spec.product_code,
+        canonical_symbol=canonical_symbol,
+        start=start_date,
+        end=end_date,
+    )
 
 def render_atlas_market_section(
     *,

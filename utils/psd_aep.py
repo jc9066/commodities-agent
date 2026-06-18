@@ -154,8 +154,17 @@ def _choose_snapshot_month(df, projection_year, as_of_date=None):
 
 # ── Prepare ────────────────────────────────────────────────────
 def _prepare_aep_data(commodity_name, attribute_id, top_n=6, as_of_date=None):
+    """
+    Option 2 logic:
+    - Pick the report cut-off month from the projection year.
+    - For each country + market year, use the latest available PSD row
+      on or before that cut-off month.
+    - This avoids blank Actual / Estimate bars when USDA does not republish
+      every historical year in the same monthly snapshot.
+    """
     if as_of_date is None:
         as_of_date = dt.date.today()
+
     cur = as_of_date.year
     actual_year, estimate_year, projection_year = cur - 2, cur - 1, cur
     years = (actual_year, estimate_year, projection_year)
@@ -173,109 +182,187 @@ def _prepare_aep_data(commodity_name, attribute_id, top_n=6, as_of_date=None):
     if df.empty:
         raise ValueError(f"No data for {commodity_name} — {ATTRIBUTE_LABELS.get(attribute_id)}.")
 
-    snapshot_date = _choose_snapshot_month(df, projection_year, as_of_date)
-    snapshot_df   = df[(df["snapshot_date"] == snapshot_date) & (df["marketYear"].isin(years))].copy()
-    if snapshot_df.empty:
-        raise ValueError("No data for selected snapshot month.")
-    snapshot_df = snapshot_df.dropna(subset=["countryName"])
+    # This is the dashboard cut-off month, usually the latest projection-year
+    # PSD snapshot available up to the current month.
+    asof_snapshot_date = _choose_snapshot_month(df, projection_year, as_of_date)
+
+    # Keep only values that were available on or before the dashboard cut-off.
+    eligible = df[
+        (df["marketYear"].isin(years)) &
+        (df["snapshot_date"].notna()) &
+        (df["snapshot_date"] <= asof_snapshot_date) &
+        (df["countryName"].notna()) &
+        (df["value"].notna())
+    ].copy()
+
+    if eligible.empty:
+        raise ValueError("No PSD values available on or before the selected report month.")
+
+    # Latest available value per country + market year.
+    latest = (
+        eligible
+        .sort_values(["countryCode", "marketYear", "snapshot_date"])
+        .drop_duplicates(["countryCode", "marketYear"], keep="last")
+    )
+
+    # Select top countries using latest available projection-year values.
+    projection_latest = latest[
+        (latest["marketYear"] == projection_year) &
+        (latest["value"] > 0)
+    ].copy()
 
     top_country_codes = (
-        snapshot_df[
-            (snapshot_df["marketYear"] == projection_year) &
-            (snapshot_df["value"].notna()) & (snapshot_df["value"] > 0)
-        ]
+        projection_latest
         .sort_values("value", ascending=False)
         .drop_duplicates("countryCode")
-        .head(top_n)["countryCode"].tolist()
+        .head(top_n)["countryCode"]
+        .tolist()
     )
+
     if not top_country_codes:
         raise ValueError("No positive projection values for top country selection.")
 
-    plot_base = snapshot_df[snapshot_df["countryCode"].isin(top_country_codes)].copy()
-    wide = plot_base.pivot_table(
-        index=["countryCode", "countryName"], columns="marketYear",
-        values="value", aggfunc="first",
-    ).reset_index()
-    for year in years:
-        if year not in wide.columns:
-            wide[year] = np.nan
-
-    plot_df = wide.melt(
-        id_vars=["countryCode", "countryName"], value_vars=list(years),
-        var_name="marketYear", value_name="value",
-    )
-    plot_df["country_rank"] = plot_df["countryCode"].map(
-        {code: i for i, code in enumerate(top_country_codes)}
+    country_rank_map = {code: i for i, code in enumerate(top_country_codes)}
+    country_name_map = (
+        projection_latest
+        .drop_duplicates("countryCode")
+        .set_index("countryCode")["countryName"]
+        .to_dict()
     )
 
-    snapshot_month_name = snapshot_date.strftime("%B")
-    status_map = {actual_year: "Actual", estimate_year: "Estimate",
-                  projection_year: f"{snapshot_month_name} Projection"}
-    short_status_map  = {actual_year: "Actual", estimate_year: "Estimate", projection_year: "Projection"}
-    series_order_map  = {actual_year: 0, estimate_year: 1, projection_year: 2}
+    # Build a complete grid so each country shows Actual, Estimate, Projection.
+    # Missing rows remain NaN instead of disappearing from the axis.
+    rows = []
+    for code in top_country_codes:
+        country_name = country_name_map.get(code, code)
+        for year in years:
+            match = latest[
+                (latest["countryCode"] == code) &
+                (latest["marketYear"] == year)
+            ]
 
-    plot_df["status"]       = plot_df["marketYear"].map(short_status_map)
+            if match.empty:
+                rows.append({
+                    "countryCode": code,
+                    "countryName": country_name,
+                    "marketYear": year,
+                    "value": np.nan,
+                    "unitDescription": np.nan,
+                    "snapshot_date": pd.NaT,
+                    "country_rank": country_rank_map[code],
+                })
+            else:
+                row = match.iloc[0].to_dict()
+                row["country_rank"] = country_rank_map[code]
+                rows.append(row)
+
+    plot_df = pd.DataFrame(rows)
+
+    asof_month_name = asof_snapshot_date.strftime("%B")
+    status_map = {
+        actual_year: "Actual",
+        estimate_year: "Estimate",
+        projection_year: "Projection",
+    }
+    series_order_map = {actual_year: 0, estimate_year: 1, projection_year: 2}
+
+    plot_df["status"] = plot_df["marketYear"].map(status_map)
     plot_df["status_label"] = plot_df["marketYear"].apply(
         lambda y: f"{_market_year_label(int(y))} {status_map[int(y)]}"
     )
     plot_df["series_order"] = plot_df["marketYear"].map(series_order_map)
 
-    mode_val  = snapshot_df["unitDescription"].dropna().mode() if "unitDescription" in snapshot_df else []
-    raw_unit  = mode_val.iloc[0] if len(mode_val) > 0 else ""
+    plot_df["snapshot_used"] = plot_df["snapshot_date"].apply(
+        lambda x: "No data" if pd.isna(x) else pd.Timestamp(x).strftime("%B %Y")
+    )
+
+    mode_val = eligible["unitDescription"].dropna().mode() if "unitDescription" in eligible else []
+    raw_unit = mode_val.iloc[0] if len(mode_val) > 0 else ""
     display_unit, scale = _get_display_unit_and_scale(raw_unit)
+
     plot_df["display_value"] = plot_df["value"] / scale
     plot_df = plot_df.sort_values(["country_rank", "series_order"], ascending=[True, True])
 
     meta = dict(
-        commodity_name=commodity_name, attribute_id=attribute_id,
+        commodity_name=commodity_name,
+        attribute_id=attribute_id,
         attribute_name=ATTRIBUTE_LABELS.get(attribute_id, str(attribute_id)),
-        snapshot_date=snapshot_date, snapshot_month_name=snapshot_month_name,
-        snapshot_year=snapshot_date.year, raw_unit=raw_unit,
-        display_unit=display_unit, scale=scale,
-        actual_year=actual_year, estimate_year=estimate_year,
-        projection_year=projection_year, top_n=top_n,
+        snapshot_date=asof_snapshot_date,
+        snapshot_month_name=asof_month_name,
+        snapshot_year=asof_snapshot_date.year,
+        raw_unit=raw_unit,
+        display_unit=display_unit,
+        scale=scale,
+        actual_year=actual_year,
+        estimate_year=estimate_year,
+        projection_year=projection_year,
+        top_n=top_n,
+        snapshot_logic="latest_available_by_market_year",
     )
     return plot_df, meta
-
 
 # ── Chart ──────────────────────────────────────────────────────
 def _make_aep_chart(plot_df, meta):
     color_map = {"Actual": "#BFC5CC", "Estimate": "#8F99A6", "Projection": "#1F77B4"}
     plot_df = plot_df.copy()
-    plot_df["bar_color"]  = plot_df["status"].map(color_map)
+    plot_df["bar_color"] = plot_df["status"].map(color_map)
     plot_df["text_label"] = plot_df["display_value"].apply(
         lambda x: "" if pd.isna(x) else f"{x:,.2f}"
     )
+
+    # Convert hover values to safe strings / objects.
+    plot_df["raw_hover"] = plot_df["value"].apply(
+        lambda x: None if pd.isna(x) else float(x)
+    )
+    plot_df["display_hover"] = plot_df["display_value"].apply(
+        lambda x: None if pd.isna(x) else float(x)
+    )
+
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=plot_df["display_value"],
         y=[plot_df["countryName"], plot_df["status_label"]],
-        orientation="h", marker_color=plot_df["bar_color"],
-        text=plot_df["text_label"], textposition="outside",
-        customdata=np.stack([plot_df["countryName"], plot_df["status_label"],
-                             plot_df["value"], plot_df["display_value"]], axis=-1),
+        orientation="h",
+        marker_color=plot_df["bar_color"],
+        text=plot_df["text_label"],
+        textposition="outside",
+        customdata=np.column_stack([
+            plot_df["countryName"],
+            plot_df["status_label"],
+            plot_df["raw_hover"],
+            plot_df["display_hover"],
+            plot_df["snapshot_used"],
+        ]),
         hovertemplate=(
-            "<b>%{customdata[0]}</b><br>%{customdata[1]}<br>"
+            "<b>%{customdata[0]}</b><br>"
+            "%{customdata[1]}<br>"
+            "Snapshot used: %{customdata[4]}<br>"
             "Raw: %{customdata[2]:,.2f}<br>"
             f"Displayed: %{{customdata[3]:,.2f}} {meta['display_unit']}<extra></extra>"
         ),
     ))
+
     fig.update_layout(
-        title=f"{meta['commodity_name']} — {meta['attribute_name']} ({meta['display_unit']})"
-              f"<br><sup>Top {meta['top_n']} countries · "
-              f"{meta['snapshot_month_name']} {meta['snapshot_year']} USDA PSD · "
-              f"Raw unit: {meta['raw_unit']}</sup>",
+        title=(
+            f"{meta['commodity_name']} — {meta['attribute_name']} ({meta['display_unit']})"
+            f"<br><sup>Top {meta['top_n']} countries · "
+            f"Latest available USDA PSD values as of "
+            f"{meta['snapshot_month_name']} {meta['snapshot_year']} · "
+            f"Raw unit: {meta['raw_unit']}</sup>"
+        ),
         height=max(500, meta["top_n"] * 95),
         margin=dict(l=180, r=80, t=90, b=50),
-        plot_bgcolor="#f6f8fa", paper_bgcolor="#ffffff",
+        plot_bgcolor="#f6f8fa",
+        paper_bgcolor="#ffffff",
         font=dict(family="IBM Plex Mono", size=11, color="#24292f"),
-        showlegend=False, bargap=0.18,
-        xaxis_title=meta["display_unit"], yaxis_title=None,
+        showlegend=False,
+        bargap=0.18,
+        xaxis_title=meta["display_unit"],
+        yaxis_title=None,
     )
     fig.update_xaxes(showgrid=True, gridcolor="#21262d", zeroline=False, rangemode="tozero")
     fig.update_yaxes(autorange="reversed", showgrid=False)
     return fig
-
 
 # ── Public render ──────────────────────────────────────────────
 def render_aep_tab(commodity: str) -> None:
@@ -306,6 +393,8 @@ def render_aep_tab(commodity: str) -> None:
 
     st.plotly_chart(_make_aep_chart(plot_df, meta), width="stretch")
     st.caption(
-        f"Source: USDA FAS PSD · Snapshot: {meta['snapshot_month_name']} {meta['snapshot_year']} · "
+        f"Source: USDA FAS PSD · Latest available values on or before "
+        f"{meta['snapshot_month_name']} {meta['snapshot_year']} · "
+        f"Actual / Estimate / Projection may use different snapshot months; see hover tooltip · "
         f"Raw unit: {meta['raw_unit']}"
     )

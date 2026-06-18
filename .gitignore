@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Streamlit / system files
+.streamlit/secrets.toml
+.env
+
+# Data cache folders
+data/atlas_cache/
+data/macros_cache/
+data/weather_cache/
+data/output/
+output/
+
+# Generated data files
+*.feather
+*.parquet
+*.csv
+*.xlsx
+
+# Cache metadata
+data/psd_cache_meta.json
+psd_cache_meta.json

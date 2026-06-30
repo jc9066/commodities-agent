@@ -112,7 +112,7 @@ from utils.macros import (
 # ─────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("## 🌐 Global Macros")
-    st.markdown("Cross-asset macro risk signals for commodity market context.")
+    st.markdown("Cross-asset macro risk signals.")
     st.markdown("---")
 
     market_period = st.selectbox(
@@ -125,14 +125,14 @@ with st.sidebar:
     st.markdown("---")
 
     sections = {
-        "01 · Global Financial Markets":        True,
-        "02 · War":                              True,
-        "03 · Sanctions":                        True,
-        "04 · Epidemics":                        True,
-        "05 · Tariffs":                          True,
-        "06 · National Economic Indicators":     True,
-        "07 · Central Bank Decisions":           True,
-        "08 · Credit & Default Contagion":       True,
+        "Global Financial Markets":        True,
+        "War":                              True,
+        "Sanctions":                        True,
+        "Epidemics":                        True,
+        "Tariffs":                          True,
+        "National Economic Indicators":     True,
+        "Central Bank Decisions":           True,
+        "Credit & Default Contagion":       True,
     }
 
     st.markdown("**Show / Hide Sections**")
@@ -140,7 +140,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption(f"Data as of: {__import__('datetime').datetime.today().strftime('%d %b %Y %H:%M')}")
-    st.caption("© Commodities Intelligence | SD Guthrie")
+    st.caption("© Commodities Intelligence | SD Guthrie International")
 
 # ─────────────────────────────────────────────────────────────
 # PAGE HEADER
@@ -156,17 +156,17 @@ st.markdown("---")
 # ─────────────────────────────────────────────────────────────
 # SECTION 01 — GLOBAL FINANCIAL MARKETS  (full-width)
 # ─────────────────────────────────────────────────────────────
-if vis.get("01 · Global Financial Markets"):
+if vis.get("Global Financial Markets"):
     render_global_markets(period=market_period)
     st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────
 # ROW A — WAR | SANCTIONS | EPIDEMICS | TARIFFS  (4 columns)
 # ─────────────────────────────────────────────────────────────
-show_war      = vis.get("02 · War")
-show_sanctions = vis.get("03 · Sanctions")
-show_epi      = vis.get("04 · Epidemics")
-show_tariffs  = vis.get("05 · Tariffs")
+show_war      = vis.get("War")
+show_sanctions = vis.get("Sanctions")
+show_epi      = vis.get("Epidemics")
+show_tariffs  = vis.get("Tariffs")
 
 if show_war or show_sanctions or show_epi or show_tariffs:
     col_war, col_sanc, col_epi, col_tar = st.columns(4)
@@ -187,9 +187,9 @@ if show_war or show_sanctions or show_epi or show_tariffs:
 # ─────────────────────────────────────────────────────────────
 # ROW B — ECON CALENDAR | CENTRAL BANKS | CREDIT CONTAGION  (3 columns)
 # ─────────────────────────────────────────────────────────────
-show_econ = vis.get("06 · National Economic Indicators")
-show_cb   = vis.get("07 · Central Bank Decisions")
-show_crd  = vis.get("08 · Credit & Default Contagion")
+show_econ = vis.get("National Economic Indicators")
+show_cb   = vis.get("Central Bank Decisions")
+show_crd  = vis.get("Credit & Default Contagion")
 
 if show_econ or show_cb or show_crd:
     col_econ, col_cb, col_crd = st.columns(3)

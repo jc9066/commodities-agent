@@ -13,22 +13,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go # type: ignore
-import plotly.express as px # type: ignore
-from plotly.subplots import make_subplots # type: ignore
 from datetime import datetime, timedelta
-import random
+
 from utils.enso import load_oni, get_enso_status, make_oni_chart
 from utils.psd_aep import render_aep_tab
 from utils.policy import load_policy, render_policy_tracker
 from pathlib import Path
 from PIL import Image
-from utils.weather import (
-    make_cached_weather_fetcher,
-    PARAM_LABEL,
-    PRIMARY_PARAM,
-)
 from datetime import datetime
-from utils.fx_live_monitor import fetch_fx_history, get_fx_snapshot
+from utils.fx_live_monitor import fetch_fx_history, get_fx_snapshot, fetch_fx_live_monitor
 from utils.atlas_market_data import (
     render_atlas_market_section,
     get_atlas_range_price_metric,
@@ -43,7 +36,6 @@ ensure_psd_cache()
 from utils.weather import render_weather_section
 from datetime import date, timedelta
  
-fetch_weather = make_cached_weather_fetcher() 
 
 
 # ─────────────────────────────────────────────────────────────
@@ -358,7 +350,6 @@ SUPPLY_DEMAND_ATTRS = [
 # ─────────────────────────────────────────────────────────────
 
 
-
 def make_iv_term_structure(atm_vol=0.25, seed=3):
     rng = np.random.default_rng(seed)
     tenors = ["1M", "2M", "3M", "6M", "9M", "12M"]
@@ -386,7 +377,7 @@ with st.sidebar:
     st.markdown("## 🌾 Commodities\nIntelligence Dashboard")
     st.markdown("---")
 
-    category = st.selectbox("**Asset Class**", list(COMMODITY_MAP.keys()))
+    category = st.selectbox("**Commodity Group**", list(COMMODITY_MAP.keys()))
     commodity = st.selectbox("**Commodity**", list(COMMODITY_MAP[category].keys()))
 
     cfg = COMMODITY_MAP[category][commodity]
@@ -448,39 +439,10 @@ market_start_date, market_end_date = resolve_market_range(
 )
 
 # Shorthand helpers
-currency   = cfg["currency"][exchange]
-regions        = cfg.get("growing_regions", [])
-top5_producers = cfg.get("top5_producer", [])
 currency = cfg["currency"].get(exchange, "")
 fx_pair  = cfg.get("fx_pair", {}).get(exchange, "USD/USD")
-
-def _parse_twin_meta(twin_label: str, commodity_map: dict) -> tuple[str, str]:
-    """
-    Given a twin_label like "Bean Oil (CME)" or "Soybeans (DCE)",
-    look up its currency and fx_pair from COMMODITY_MAP.
-    Returns (currency_string, fx_pair_string).
-    Falls back to ("USD/MT", "USD/USD") if not found.
-    """
-    for cat in commodity_map.values():
-        for comm_name, comm_cfg in cat.items():
-            if comm_name.lower() in twin_label.lower():
-                # find matching exchange key
-                for exch_key, ccy in comm_cfg.get("currency", {}).items():
-                    # match exchange abbreviation that appears in twin_label
-                    abbr = exch_key.split("(")[-1].rstrip(")").strip()  # e.g. "CME"
-                    if abbr.upper() in twin_label.upper():
-                        fx = comm_cfg.get("fx_pair", {}).get(exch_key, "USD/USD")
-                        return ccy, fx
-                # fallback: take first exchange entry
-                first_exch = list(comm_cfg.get("currency", {}).keys())[0]
-                return (
-                    comm_cfg["currency"][first_exch],
-                    comm_cfg.get("fx_pair", {}).get(first_exch, "USD/USD"),
-                )
-    return "USD/MT", "USD/USD"
- 
-
 policy_df = load_policy() 
+
 # ─────────────────────────────────────────────────────────────
 # HEADER
 # ─────────────────────────────────────────────────────────────
@@ -490,7 +452,6 @@ st.markdown(
     f'{category} · {exchange} · {currency}</span>',
     unsafe_allow_html=True
 )
-# st.markdown("---")
 
 # ─────────────────────────────────────────────────────────────
 # ROW 1 — TOP METRICS
@@ -504,17 +465,26 @@ _atlas_metric = get_atlas_range_price_metric(
 
 latest_px = _atlas_metric.get("latest_px", np.nan)
 chg_pct = _atlas_metric.get("chg_pct", np.nan)
-# Live FX rate from Yahoo Finance via fx.py (cached, 1-hour TTL)
-# lookback_days=10 guarantees >=5 business days even across weekends/holidays
+# Live FX rate from Yahoo Finance
 try:
-    _fx_history = fetch_fx_history((fx_pair,), lookback_days=10)
-    _fx_snap    = get_fx_snapshot(_fx_history.get(fx_pair, pd.Series(dtype=float)))
-    fx_val      = _fx_snap["rate"] if not np.isnan(_fx_snap["rate"]) else 1.0
-    fx_chg      = _fx_snap["chg_1d"] if not np.isnan(_fx_snap["chg_1d"]) else 0.0
-except Exception:
-    fx_val = 1.0
-    fx_chg = 0.0
- 
+    if fx_pair == "USD/USD":
+        fx_val = 1.0
+        fx_chg = 0.0
+    else:
+        _fx_live_df = fetch_fx_live_monitor((fx_pair,))
+        _fx_row = _fx_live_df.loc[_fx_live_df["Pair"].eq(fx_pair)]
+
+        if _fx_row.empty:
+            fx_val = np.nan
+            fx_chg = np.nan
+        else:
+            fx_val = float(_fx_row.iloc[0]["Rate"])
+            fx_chg = float(_fx_row.iloc[0]["1D %"])
+
+except Exception as exc:
+    st.warning(f"Live FX metric unavailable: {exc}")
+    fx_val = np.nan
+    fx_chg = np.nan
 
 
 # ------- ENSO DATA ---------------------------------------------------------------
@@ -549,9 +519,9 @@ metric_card(
 metric_card(
     _metric_cols[1],
     fx_pair,
-    f"{fx_val:.4f}",
-    f"{fx_chg:+.2f}%",
-    delta_pos=fx_chg >= 0,
+    "N/A" if pd.isna(fx_val) else f"{fx_val:.4f}",
+    None if pd.isna(fx_chg) else f"{fx_chg:+.2f}%",
+    delta_pos=False if pd.isna(fx_chg) else fx_chg >= 0,
 )
 
 with _metric_cols[2]:
@@ -589,7 +559,7 @@ with _col_fx:
     )
 
 with _col_sd:
-    st.markdown('<div class="section-header">03 · Supply & Demand Analysis</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Supply & Demand Analysis</div>', unsafe_allow_html=True)
 
     # ── Resolve USDA commodity code for selected commodity ────────
     _psd_supported = commodity in COMMODITY_CODES
@@ -631,6 +601,7 @@ with _col_sd:
                         st.info(f"No world S&D data for {commodity}.")
                     else:
                         st.plotly_chart(_fig_sd, width='stretch')
+
     # ── Tab 2: Top Countries by Attribute ─────────────────────────
     with tab_sd2:
         if not _psd_supported:
@@ -690,58 +661,10 @@ with _col_sd:
         render_aep_tab(commodity)
 
 with _col_policy:
-    st.markdown('<div class="section-header">05 · Policy Tracker</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Policy Tracker</div>', unsafe_allow_html=True)
     render_policy_tracker(policy_df, commodity)
 
 st.markdown("---")
-
-_today  = datetime.today()
-_mstart = _today.replace(day=1).strftime("%Y-%m-%d")
-_mend   = _today.strftime("%Y-%m-%d")
-
-
-def render_multi_param_mini_charts(weather_result, selected_group, commodity):
-    """
-    Renders small sparkline cards for each parameter in the selected group.
-    Call this right after the main weather chart inside col_rain.
-    """
-    grp_data = next(
-        (g for g in weather_result["groups"] if g["label"] == selected_group), None
-    )
-    if not grp_data:
-        return
- 
-    params = [p for p in grp_data["data"] if not grp_data["data"][p].empty]
-    if len(params) <= 1:
-        return   # nothing extra to show
- 
-    zone_col = grp_data["zone_col"]
-    cols = st.columns(len(params))
-    colors_p = ["#58a6ff", "#3fb950", "#f78166", "#d2a8ff", "#ffa657"]
- 
-    for col, param, color in zip(cols, params, colors_p):
-        df = grp_data["data"][param]
-        # Average across all zones
-        agg = df.groupby("date")[
-            [c for c in df.columns if c not in (zone_col, "date", "station_count")][0]
-        ].mean().reset_index()
- 
-        fig = go.Figure(go.Scatter(
-            x=agg["date"], y=agg.iloc[:, 1],
-            mode="lines", line=dict(color=color, width=1.5),
-            fill="tozeroy", fillcolor=color.replace("#", "rgba(").rstrip(")") + ",0.08)",
-        ))
-        fig.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="#0d1117", plot_bgcolor="#161b22",
-            height=120, margin=dict(l=0, r=0, t=18, b=0),
-            showlegend=False,
-            title=dict(text=PARAM_LABEL.get(param, param), font=dict(size=10), x=0),
-            font=dict(family="IBM Plex Mono", size=9),
-        )
-        fig.update_xaxes(visible=False)
-        fig.update_yaxes(gridcolor="#21262d", tickfont=dict(size=8))
-        col.plotly_chart(fig, width="stretch")
 
 # ── ROW 3 — 03 WEATHER | 08 CROP CALENDAR | 04 ENSO ONI INDEX ───────────────
 _col_weather, _col_right, _col_risk = st.columns([1.55, 1.55, 1.45])
@@ -753,11 +676,11 @@ with _col_weather:
         dark=True,
         cache_path="data/weather_cache/weather_daily.feather",
         force_refresh=False,
-        refresh_recent_days=2,
+        refresh_recent_days=1,
     )
 
 with _col_right:
-    st.markdown('<div class="section-header">08 · Crop Calendar</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-header">Crop Calendar</div>', unsafe_allow_html=True)
 
     # Each commodity maps to a list of (label, image_path) tuples
     CROP_CALENDAR_IMAGES = {
@@ -851,7 +774,7 @@ with _col_right:
     # ─────────────────────────────────────────────────────────────
 
 with _col_right:
-    st.markdown('<div class="section-header">04 · ENSO ONI Index</div>',
+    st.markdown('<div class="section-header">ENSO RONI Index</div>',
                 unsafe_allow_html=True)
 
     start_year = st.slider(
@@ -868,7 +791,7 @@ with _col_right:
     st.caption("Source: NOAA CPC · 3-month running mean SST Niño 3.4")
 
 with _col_risk:
-    st.markdown('<div class="section-header">09 · Risk Flows & Implied Volatility</div>',
+    st.markdown('<div class="section-header">Risk Flows & Implied Volatility</div>',
                 unsafe_allow_html=True)
 
     col_iv, col_cot = st.columns(2)

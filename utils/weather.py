@@ -2653,7 +2653,7 @@ def render_weather_section(
     import streamlit as st
 
     st.markdown(
-        '<div class="section-header">03 · Weather — Futures Risk View</div>',
+        '<div class="section-header">Weather Analysis</div>',
         unsafe_allow_html=True,
     )
 

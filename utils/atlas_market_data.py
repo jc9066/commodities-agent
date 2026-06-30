@@ -41,20 +41,14 @@ from atlas_client import AtlasClient
 try:  # preferred when this file is saved in utils/
     from utils.fx_live_monitor import (  # type: ignore
         fetch_fx_history,
-        get_fx_snapshot,
         to_usd_per_mt,
-        # get_fx_attribution,
-        # make_fx_attribution_chart,
         make_fx_overlay_chart,
         fetch_fx_live_monitor,
     )
 except Exception:  # fallback when this file is beside fx_live_monitor.py
     from fx_live_monitor import (  # type: ignore
         fetch_fx_history,
-        get_fx_snapshot,
         to_usd_per_mt,
-        # get_fx_attribution,
-        # make_fx_attribution_chart,
         make_fx_overlay_chart,
         fetch_fx_live_monitor,
     )
@@ -343,19 +337,6 @@ def _contract_sort_key(df: pd.DataFrame, as_of: date | None = None) -> pd.DataFr
         out = out.sort_values("canonical_symbol")
     return out
 
-
-def contract_label(row: pd.Series) -> str:
-    symbol = str(row.get("canonical_symbol", ""))
-    expiry = row.get("expiry_date")
-    if pd.notna(expiry):
-        try:
-            expiry_s = pd.to_datetime(expiry).strftime("%Y-%m-%d")
-            return f"{symbol}  ·  exp {expiry_s}"
-        except Exception:
-            pass
-    return symbol
-
-
 def _date_str(value: date | datetime | str) -> str:
     return pd.to_datetime(value).strftime("%Y-%m-%d")
 
@@ -461,54 +442,6 @@ def load_atlas_futures_history(canonical_symbol: str, start: str, end: str) -> p
         out["volume"] = np.nan
 
     return out.sort_values("date").reset_index(drop=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Metrics helpers for replacing dummy metric numbers in dashboard.py
-# ─────────────────────────────────────────────────────────────────────────────
-
-@st.cache_data(ttl=900, show_spinner=False)
-def get_latest_atlas_price_metric(commodity: str, exchange_label: str, lookback_days: int = 45) -> dict:
-    """
-    Return latest price and 1-observation % change for the top metric card.
-    This is intentionally small and cached so the metric card can load quickly.
-    """
-    spec = resolve_product_spec(commodity, exchange_label)
-    if spec is None:
-        return {"available": False, "message": f"Atlas mapping unavailable currently for {commodity} / {exchange_label}."}
-    if not spec.data_available:
-        return {"available": False, "message": f"{spec.exchange_code} / {spec.provider_exchange} data is unavailable currently."}
-
-    try:
-        contracts = load_atlas_futures_contracts(spec.exchange_code, spec.product_code)
-        contracts = _contract_sort_key(contracts, date.today())
-        if contracts.empty or "canonical_symbol" not in contracts.columns:
-            return {"available": False, "message": f"No active Atlas futures contract found for {spec.product_desc}."}
-
-        symbol = str(contracts.iloc[0]["canonical_symbol"])
-        end = date.today()
-        start = end - timedelta(days=lookback_days)
-        hist = load_atlas_futures_history(symbol, _date_str(start), _date_str(end))
-        price = hist["price"].dropna() if "price" in hist.columns else pd.Series(dtype=float)
-        if price.empty:
-            return {"available": False, "message": f"No Atlas price history found for {symbol}."}
-
-        latest = float(price.iloc[-1])
-        prev = float(price.iloc[-2]) if len(price) >= 2 else np.nan
-        chg_pct = (latest / prev - 1.0) * 100.0 if prev and not np.isnan(prev) else np.nan
-        latest_date = hist.loc[hist["price"].notna(), "date"].iloc[-1]
-
-        return {
-            "available": True,
-            "latest_px": latest,
-            "chg_pct": chg_pct,
-            "symbol": symbol,
-            "date": pd.to_datetime(latest_date).strftime("%Y-%m-%d"),
-            "currency_unit": spec.currency_unit,
-            "message": "",
-        }
-    except Exception as exc:
-        return {"available": False, "message": f"Atlas market price unavailable currently: {exc}"}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -682,24 +615,6 @@ def _status_row(label: str, spec: AtlasProductSpec | None, status: str, symbol: 
         "Status": status,
     }
 
-
-def _load_front_contract_history(
-    spec: AtlasProductSpec,
-    start_date: date,
-    end_date: date,
-) -> tuple[str | None, pd.DataFrame, str]:
-    if not spec.data_available:
-        return None, pd.DataFrame(), f"{spec.exchange_code} / {spec.provider_exchange} data unavailable currently"
-    contracts = load_atlas_futures_contracts(spec.exchange_code, spec.product_code)
-    contracts = _contract_sort_key(contracts, end_date)
-    if contracts.empty or "canonical_symbol" not in contracts.columns:
-        return None, pd.DataFrame(), f"No active Atlas contract found for {spec.product_desc}"
-    symbol = str(contracts.iloc[0]["canonical_symbol"])
-    hist = load_atlas_futures_history(symbol, _date_str(start_date), _date_str(end_date))
-    if hist.empty or not hist["price"].notna().any():
-        return symbol, hist, f"No Atlas price history found for {symbol}"
-    return symbol, hist, "OK"
-
 def get_atlas_range_price_metric(
     commodity: str,
     exchange_label: str,
@@ -731,15 +646,9 @@ def get_atlas_range_price_metric(
         }
 
     try:
-        # If you already added the continuous front-month function, use it.
-        if "_load_continuous_front_month_history" in globals():
-            symbol, hist, status = _load_continuous_front_month_history(
-                spec, start_date, end_date
-            )
-        else:
-            symbol, hist, status = _load_front_contract_history(
-                spec, start_date, end_date
-            )
+        symbol, hist, status = _load_continuous_front_month_history(
+            spec, start_date, end_date
+        )
 
         if status != "OK" or hist.empty or "price" not in hist.columns:
             return {
@@ -924,15 +833,6 @@ def _series_for_normalized_chart(hist: pd.DataFrame, spec: AtlasProductSpec, lab
     return converted.dropna()
 
 
-def _get_contract_options(spec: AtlasProductSpec, as_of: date) -> pd.DataFrame:
-    if not spec.data_available:
-        return pd.DataFrame()
-    try:
-        contracts = load_atlas_futures_contracts(spec.exchange_code, spec.product_code)
-        return _contract_sort_key(contracts, as_of)
-    except Exception:
-        return pd.DataFrame()
-
 def _load_history_with_feather_cache(
     spec: "AtlasProductSpec",
     canonical_symbol: str,
@@ -959,7 +859,7 @@ def render_atlas_market_section(
     fx_pair: str | None = None,
     twin_labels: list[str] | tuple[str, ...] | set[str] | None = None,
     lookback_days: int = 365,
-    section_title: str = "02 · FX Impact Analysis",
+    section_title: str = "Market Prices, Twin Markets and FX Impact",
 ) -> None:
     """
     Drop-in renderer for the dashboard's FX/Market section.
@@ -1006,7 +906,6 @@ def render_atlas_market_section(
     tab_market, tab_norm, tab_overlay, tab_monitor = st.tabs([
         "01 · Market Prices",
         "📊 Normalized Prices",
-        # "🔀 Attribution",
         "📈 Price vs FX Overlay",
         "💱 FX Monitor",
     ])
@@ -1093,47 +992,6 @@ def render_atlas_market_section(
         if not status_df.empty:
             with st.expander("Atlas data availability / status", expanded=False):
                 st.dataframe(status_df, hide_index=True, width="stretch")
-
-    # with tab_attr:
-    #     if main_status != "OK":
-    #         _show_unavailable(main_status)
-    #     else:
-    #         st.caption("Daily price move split into local price move and FX translation using the selected futures series.")
-    #         try:
-    #             pair = active_fx_pair
-    #             if pair == "USD/USD":
-    #                 active_fx = pd.Series(1.0, index=pd.to_datetime(main_hist["date"]), name=pair)
-    #             else:
-    #                 hist = fetch_fx_history((pair,), lookback_days=max(lookback_days, (end_date - start_date).days + 10))
-    #                 active_fx = hist.get(pair, pd.Series(dtype=float))
-    #             local_prices = main_hist.set_index(pd.to_datetime(main_hist["date"]))["price"].dropna()
-    #             active_fx.index = pd.to_datetime(active_fx.index).tz_localize(None).normalize()
-    #             active_fx = active_fx.reindex(local_prices.index, method="ffill")
-
-    #             unit_conv = 1.0
-    #             if active_currency == "USc/bu":
-    #                 # to_usd_per_mt handles the full conversion, but get_fx_attribution
-    #                 # expects a simple multiplier from local price into USD before FX.
-    #                 # Use a commodity-specific approximation consistent with fx_live_monitor.py.
-    #                 bushel_mt = {"Corn": 0.025401, "Wheat": 0.027216, "Soybeans": 0.027216}.get(commodity, 0.027216)
-    #                 unit_conv = 1.0 / 100.0 / bushel_mt
-    #             elif active_currency == "USc/lb":
-    #                 unit_conv = 22.0462
-
-    #             attr_df = get_fx_attribution(
-    #                 local_prices=local_prices,
-    #                 fx_series=active_fx,
-    #                 local_ccy=active_currency,
-    #                 target_ccy="USD",
-    #                 unit_conv=unit_conv,
-    #             )
-    #             if attr_df.empty:
-    #                 _show_unavailable("FX attribution cannot be calculated for the selected range.")
-    #             else:
-    #                 window = st.slider("Rolling window (trading days)", 20, 252, min(60, max(20, len(attr_df))), step=5, key=f"atlas_attr_{commodity}_{exchange}")
-    #                 st.plotly_chart(make_fx_attribution_chart(attr_df, window=window, commodity_ccy="USD"), width="stretch")
-    #         except Exception as exc:
-    #             _show_unavailable(f"FX attribution unavailable currently: {exc}")
 
     with tab_overlay:
         if main_status != "OK":

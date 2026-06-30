@@ -247,7 +247,7 @@ def load_epidemics(year: int | None = None) -> pd.DataFrame:
 
 
 def render_epidemics() -> None:
-    _section_header("04 · Epidemics · WHO Disease Outbreak News")
+    _section_header("Epidemics · WHO Disease Outbreak News")
 
     year_sel = st.selectbox("Year", list(range(datetime.today().year, 2018, -1)),
                             key="epi_year", label_visibility="collapsed")
@@ -300,7 +300,7 @@ SECTION_NEWS_CONFIG = {
         "fp":       FP_SANCTIONS,
         "keywords": ["sanction", "sanctioned", "embargo", "OFAC", "export control", "blacklist",
                      "asset freeze", "designated", "SDN list", "trade restriction"],
-        "label":    "03 · Sanctions",
+        "label":    "Sanctions",
         "header_num": "03",
         "color":    C_ORANGE,
     },
@@ -309,7 +309,7 @@ SECTION_NEWS_CONFIG = {
         "keywords": ["tariff", "trade war", "import duty", "customs duty", "Section 301",
                      "Section 232", "countervailing duty", "anti-dumping", "trade barrier",
                      "trade dispute", "WTO", "retaliatory", "levy"],
-        "label":    "05 · Tariffs",
+        "label":    "Tariffs",
         "header_num": "05",
         "color":    C_PURPLE,
     },
@@ -318,7 +318,7 @@ SECTION_NEWS_CONFIG = {
         "keywords": ["war", "warfare", "invasion", "airstrike", "missile", "military operation",
                      "ceasefire", "offensive", "troops", "combat", "conflict", "shelling",
                      "drone attack", "armed forces", "bombardment", "front line"],
-        "label":    "02 · War & Armed Conflict",
+        "label":    "War & Geopolitics",
         "header_num": "02",
         "color":    C_RED,
     },
@@ -579,7 +579,7 @@ def load_econ_calendar(week: str = "This Week") -> pd.DataFrame:
 
 
 def render_econ_calendar() -> None:
-    _section_header("06 · National Economic Indicators · Economic Calendar")
+    _section_header("National Economic Indicators · Economic Calendar")
 
     # ── Week selector ────────────────────────────────────────
     wc1, wc2 = st.columns([2, 4])
@@ -694,7 +694,7 @@ def render_econ_calendar() -> None:
 # ──────────────────────────────────────────────────────────────
 
 def render_central_banks() -> None:
-    _section_header("07 · Central Bank Decisions")
+    _section_header("Central Bank Decisions")
     _placeholder_card(
         "No live data source connected",
         "Planned: Fed FOMC minutes (FRED), ECB decisions, BNM/BI/RBI rate decisions. "
@@ -707,7 +707,7 @@ def render_central_banks() -> None:
 # ──────────────────────────────────────────────────────────────
 
 def render_credit_contagion() -> None:
-    _section_header("08 · Global Credit & Default Contagion")
+    _section_header("Global Credit & Default Contagion")
     _placeholder_card(
         "No live data source connected",
         "Planned: sovereign CDS spreads (FRED / Bloomberg), EM hard-currency bond spreads (EMBI), "

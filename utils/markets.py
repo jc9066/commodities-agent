@@ -353,7 +353,7 @@ def render_global_markets(period: str = "1y") -> None:
         '<div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;'
         f'color:{TEXT_MUTE};font-family:IBM Plex Mono,monospace;'
         f'border-bottom:1px solid {BORDER};padding-bottom:6px;margin-bottom:14px;">'
-        "01 · Global Financial Markets</div>",
+        "Global Financial Markets</div>",
         unsafe_allow_html=True,
     )
 
